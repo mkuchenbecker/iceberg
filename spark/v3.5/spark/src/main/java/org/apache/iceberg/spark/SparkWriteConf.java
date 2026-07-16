@@ -138,6 +138,8 @@ public class SparkWriteConf {
     return (short)
         confParser
             .intConf()
+            .sessionConf(SparkSQLProperties.DELETE_FILE_REPLICATION) // [openhouse #229]
+            .tableProperty(TableProperties.DELETE_FILE_REPLICATION)
             .option(SparkWriteOptions.DELETE_FILE_REPLICATION)
             .defaultValue(SparkWriteOptions.DEFAULT_DELETE_FILE_REPLICATION)
             .parse();

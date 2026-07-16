@@ -38,6 +38,10 @@ public class SparkSQLProperties {
   public static final String CHECK_ORDERING = "spark.sql.iceberg.check-ordering";
   public static final boolean CHECK_ORDERING_DEFAULT = true;
 
+  // [openhouse #229] session-level override for delete-file replication (write-option and
+  // table-property levels are upstream in 1.10: SparkWriteOptions/TableProperties.DELETE_FILE_REPLICATION)
+  public static final String DELETE_FILE_REPLICATION = "spark.sql.iceberg.delete-file-replication";
+
   // Controls whether to preserve the existing grouping of data while planning splits
   public static final String PRESERVE_DATA_GROUPING =
       "spark.sql.iceberg.planning.preserve-data-grouping";

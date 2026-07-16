@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 import org.apache.iceberg.BaseCombinedScanTask;
+import org.apache.iceberg.ContentScanTask;
 import org.apache.iceberg.BaseScanTaskGroup;
 import org.apache.iceberg.CombinedScanTask;
 import org.apache.iceberg.FileContent;

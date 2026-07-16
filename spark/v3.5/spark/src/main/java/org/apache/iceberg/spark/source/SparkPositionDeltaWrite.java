@@ -105,6 +105,7 @@ class SparkPositionDeltaWrite implements DeltaWrite, RequiresDistributionAndOrde
   private final SparkBatchQueryScan scan;
   private final IsolationLevel isolationLevel;
   private final String applicationId;
+  private final String applicationName;
   private final boolean wapEnabled;
   private final String wapId;
   private final String branch;
@@ -130,6 +131,7 @@ class SparkPositionDeltaWrite implements DeltaWrite, RequiresDistributionAndOrde
     this.scan = scan;
     this.isolationLevel = isolationLevel;
     this.applicationId = spark.sparkContext().applicationId();
+    this.applicationName = spark.sparkContext().appName();
     this.wapEnabled = writeConf.wapEnabled();
     this.wapId = writeConf.wapId();
     this.branch = writeConf.branch();
@@ -137,6 +139,7 @@ class SparkPositionDeltaWrite implements DeltaWrite, RequiresDistributionAndOrde
     this.writeRequirements = writeConf.positionDeltaRequirements(command);
     this.context = new Context(dataSchema, writeConf, info, writeRequirements);
     this.writeProperties = writeConf.writeProperties();
+    this.replicationFactor = writeConf.deleteFileReplication();
   }
 
   @Override
@@ -320,6 +323,10 @@ class SparkPositionDeltaWrite implements DeltaWrite, RequiresDistributionAndOrde
         operation.set("spark.app.id", applicationId);
       }
 
+      if (applicationName != null) {
+        operation.set("spark.app.name", applicationName);
+      }
+
       extraSnapshotMetadata.forEach(operation::set);
 
       CommitMetadata.commitProperties().forEach(operation::set);
@@ -418,6 +425,7 @@ class SparkPositionDeltaWrite implements DeltaWrite, RequiresDistributionAndOrde
               .format(context.deleteFileFormat())
               .operationId(context.queryId())
               .suffix("deletes")
+              .replicationFactor(replicationFactor)
               .build();
 
       SparkFileWriterFactory writerFactory =

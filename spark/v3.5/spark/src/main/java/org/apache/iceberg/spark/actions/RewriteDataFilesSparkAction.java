@@ -385,6 +385,10 @@ public class RewriteDataFilesSparkAction
             MAX_CONCURRENT_FILE_GROUP_REWRITES,
             MAX_CONCURRENT_FILE_GROUP_REWRITES_DEFAULT);
 
+    maxTotalFilesSizeBytes =
+        PropertyUtil.propertyAsLong(
+            options(), MAX_TOTAL_FILES_SIZE_BYTES, MAX_TOTAL_FILES_SIZE_BYTES_DEFAULT);
+
     maxCommits =
         PropertyUtil.propertyAsInt(
             options(), PARTIAL_PROGRESS_MAX_COMMITS, PARTIAL_PROGRESS_MAX_COMMITS_DEFAULT);

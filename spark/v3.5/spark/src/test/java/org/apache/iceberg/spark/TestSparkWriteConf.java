@@ -199,6 +199,11 @@ public class TestSparkWriteConf extends TestBaseWithCatalog {
   public void testAdvisoryPartitionSize() {
     Table table = validationCatalog.loadTable(tableIdent);
 
+    // An advisory partition size is only reported when a distribution is requested (Spark prohibits
+    // requesting a size without distribution). Since the default for partitioned tables is NONE in
+    // this fork, explicitly request HASH so the advisory size resolution can be exercised.
+    table.updateProperties().set(WRITE_DISTRIBUTION_MODE, WRITE_DISTRIBUTION_MODE_HASH).commit();
+
     SparkWriteConf writeConf = new SparkWriteConf(spark, table, ImmutableMap.of());
 
     long value1 = writeConf.writeRequirements().advisoryPartitionSize();
@@ -219,7 +224,17 @@ public class TestSparkWriteConf extends TestBaseWithCatalog {
 
     SparkWriteConf writeConf = new SparkWriteConf(spark, table, ImmutableMap.of());
 
-    checkMode(DistributionMode.HASH, writeConf);
+    // In this fork, normal writes to a partitioned (unsorted) table default to NONE rather than
+    // HASH to avoid an Iceberg-injected shuffle that interacts poorly with Celeborn (see
+    // SparkWriteConf#defaultWriteDistributionMode). Row-level operations (DELETE/UPDATE/MERGE)
+    // are unaffected and still default to HASH.
+    assertThat(writeConf.distributionMode()).isEqualTo(DistributionMode.NONE);
+    assertThat(writeConf.copyOnWriteDistributionMode(DELETE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.positionDeltaDistributionMode(DELETE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.copyOnWriteDistributionMode(UPDATE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.positionDeltaDistributionMode(UPDATE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.copyOnWriteDistributionMode(MERGE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.positionDeltaDistributionMode(MERGE)).isEqualTo(DistributionMode.HASH);
   }
 
   @TestTemplate
@@ -591,5 +606,47 @@ public class TestSparkWriteConf extends TestBaseWithCatalog {
     assertThat(writeConf.positionDeltaDistributionMode(UPDATE)).isEqualTo(expectedMode);
     assertThat(writeConf.copyOnWriteDistributionMode(MERGE)).isEqualTo(expectedMode);
     assertThat(writeConf.positionDeltaDistributionMode(MERGE)).isEqualTo(expectedMode);
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationDefault() {
+    Table table = validationCatalog.loadTable(tableIdent);
+    SparkWriteConf writeConf = new SparkWriteConf(spark, table, ImmutableMap.of());
+
+    // Default replication factor should be 3 as per DEFAULT_DELETE_FILE_REPLICATION
+    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 3);
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationFromWriteOption() {
+    Table table = validationCatalog.loadTable(tableIdent);
+
+    Map<String, String> writeOptions =
+        ImmutableMap.of(SparkWriteOptions.DELETE_FILE_REPLICATION, "5");
+
+    SparkWriteConf writeConf = new SparkWriteConf(spark, table, writeOptions);
+    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 5);
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationWithOne() {
+    Table table = validationCatalog.loadTable(tableIdent);
+
+    Map<String, String> writeOptions =
+        ImmutableMap.of(SparkWriteOptions.DELETE_FILE_REPLICATION, "1");
+
+    SparkWriteConf writeConf = new SparkWriteConf(spark, table, writeOptions);
+    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 1);
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationWithMaxValue() {
+    Table table = validationCatalog.loadTable(tableIdent);
+
+    Map<String, String> writeOptions =
+        ImmutableMap.of(SparkWriteOptions.DELETE_FILE_REPLICATION, String.valueOf(Short.MAX_VALUE));
+
+    SparkWriteConf writeConf = new SparkWriteConf(spark, table, writeOptions);
+    assertThat(writeConf.deleteFileReplication()).isEqualTo(Short.MAX_VALUE);
   }
 }

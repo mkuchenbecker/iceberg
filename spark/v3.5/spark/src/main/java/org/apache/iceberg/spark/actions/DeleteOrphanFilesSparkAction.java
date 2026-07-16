@@ -91,11 +91,25 @@ import scala.Tuple2;
  * dataset provided which are not found in table metadata will be deleted, using the same {@link
  * Table#location()} and {@link #olderThan(long)} filtering as above.
  *
+ * <p>Streaming mode can be enabled via the {@value #STREAM_RESULTS} option to avoid loading all
+ * orphan file paths into driver memory. When enabled, the result will contain only a sample of file
+ * paths (up to {@value #MAX_ORPHAN_FILE_SAMPLE_SIZE_DEFAULT}). The total count of deleted files is
+ * logged but not included in the result.
+ *
  * <p><em>Note:</em> It is dangerous to call this action with a short retention interval as it might
  * corrupt the state of the table if another operation is writing at the same time.
  */
 public class DeleteOrphanFilesSparkAction extends BaseSparkAction<DeleteOrphanFilesSparkAction>
     implements DeleteOrphanFiles {
+
+  public static final String STREAM_RESULTS = "stream-results";
+  public static final boolean STREAM_RESULTS_DEFAULT = false;
+
+  // Test-only option to configure the max sample size for streaming mode
+  @VisibleForTesting
+  static final String MAX_ORPHAN_FILE_SAMPLE_SIZE = "max-orphan-file-sample-size";
+
+  private static final int MAX_ORPHAN_FILE_SAMPLE_SIZE_DEFAULT = 20000;
 
   private static final Logger LOG = LoggerFactory.getLogger(DeleteOrphanFilesSparkAction.class);
   private static final Map<String, String> EQUAL_SCHEMES_DEFAULT = ImmutableMap.of("s3n,s3a", "s3");
@@ -103,6 +117,7 @@ public class DeleteOrphanFilesSparkAction extends BaseSparkAction<DeleteOrphanFi
   private static final int MAX_DRIVER_LISTING_DIRECT_SUB_DIRS = 10;
   private static final int MAX_EXECUTOR_LISTING_DEPTH = 2000;
   private static final int MAX_EXECUTOR_LISTING_DIRECT_SUB_DIRS = Integer.MAX_VALUE;
+  private static final int DELETE_GROUP_SIZE = 100000;
 
   private final SerializableConfiguration hadoopConf;
   private final int listingParallelism;
@@ -356,37 +371,45 @@ public class DeleteOrphanFilesSparkAction extends BaseSparkAction<DeleteOrphanFi
   }
 
   @VisibleForTesting
-  static List<String> findOrphanFiles(
-      SparkSession spark,
+  static Dataset<String> findOrphanFiles(
       Dataset<FileURI> actualFileIdentDS,
       Dataset<FileURI> validFileIdentDS,
       PrefixMismatchMode prefixMismatchMode) {
 
     SetAccumulator<Pair<String, String>> conflicts = new SetAccumulator<>();
-    spark.sparkContext().register(conflicts);
+    actualFileIdentDS.sparkSession().sparkContext().register(conflicts);
 
     Column joinCond = actualFileIdentDS.col("path").equalTo(validFileIdentDS.col("path"));
 
-    List<String> orphanFiles =
+    Dataset<String> orphanFileDS =
         actualFileIdentDS
             .joinWith(validFileIdentDS, joinCond, "leftouter")
-            .mapPartitions(new FindOrphanFiles(prefixMismatchMode, conflicts), Encoders.STRING())
-            .collectAsList();
+            .mapPartitions(new FindOrphanFiles(prefixMismatchMode, conflicts), Encoders.STRING());
 
-    if (prefixMismatchMode == PrefixMismatchMode.ERROR && !conflicts.value().isEmpty()) {
-      throw new ValidationException(
-          "Unable to determine whether certain files are orphan. "
-              + "Metadata references files that match listed/provided files except for authority/scheme. "
-              + "Please, inspect the conflicting authorities/schemes and provide which of them are equal "
-              + "by further configuring the action via equalSchemes() and equalAuthorities() methods. "
-              + "Set the prefix mismatch mode to 'NONE' to ignore remaining locations with conflicting "
-              + "authorities/schemes or to 'DELETE' iff you are ABSOLUTELY confident that remaining conflicting "
-              + "authorities/schemes are different. It will be impossible to recover deleted files. "
-              + "Conflicting authorities/schemes: %s.",
-          conflicts.value());
+    // Cache and force computation to populate conflicts accumulator
+    orphanFileDS = orphanFileDS.cache();
+
+    try {
+      orphanFileDS.count();
+
+      if (prefixMismatchMode == PrefixMismatchMode.ERROR && !conflicts.value().isEmpty()) {
+        throw new ValidationException(
+            "Unable to determine whether certain files are orphan. Metadata references files that"
+                + " match listed/provided files except for authority/scheme. Please, inspect the"
+                + " conflicting authorities/schemes and provide which of them are equal by further"
+                + " configuring the action via equalSchemes() and equalAuthorities() methods. Set the"
+                + " prefix mismatch mode to 'NONE' to ignore remaining locations with conflicting"
+                + " authorities/schemes or to 'DELETE' iff you are ABSOLUTELY confident that"
+                + " remaining conflicting authorities/schemes are different. It will be impossible to"
+                + " recover deleted files. Conflicting authorities/schemes: %s.",
+            conflicts.value());
+      }
+
+      return orphanFileDS;
+    } catch (Exception e) {
+      orphanFileDS.unpersist();
+      throw e;
     }
-
-    return orphanFiles;
   }
 
   private static Map<String, String> flattenMap(Map<String, String> map) {

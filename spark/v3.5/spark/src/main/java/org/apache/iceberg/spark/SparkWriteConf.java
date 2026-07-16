@@ -134,6 +134,15 @@ public class SparkWriteConf {
         .parse();
   }
 
+  public short deleteFileReplication() {
+    return (short)
+        confParser
+            .intConf()
+            .option(SparkWriteOptions.DELETE_FILE_REPLICATION)
+            .defaultValue(SparkWriteOptions.DEFAULT_DELETE_FILE_REPLICATION)
+            .parse();
+  }
+
   public String wapId() {
     return sessionConf.get(SparkSQLProperties.WAP_ID, null);
   }
@@ -312,7 +321,7 @@ public class SparkWriteConf {
     if (table.sortOrder().isSorted()) {
       return RANGE;
     } else if (table.spec().isPartitioned()) {
-      return HASH;
+      return NONE;
     } else {
       return NONE;
     }

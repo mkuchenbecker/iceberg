@@ -1,0 +1,25 @@
+diff a/spark/v3.5/spark/src/test/java/org/apache/iceberg/spark/actions/TestRemoveOrphanFilesAction.java b/spark/v3.5/spark/src/test/java/org/apache/iceberg/spark/actions/TestRemoveOrphanFilesAction.java	(rejected hunks)
+@@ -168,8 +170,22 @@ public abstract class TestRemoveOrphanFilesAction extends TestBase {
+         .isTrue();
+ 
+     DeleteOrphanFiles.Result result3 =
+-        actions.deleteOrphanFiles(table).olderThan(System.currentTimeMillis()).execute();
++        actions
++            .deleteOrphanFiles(table)
++            .olderThan(System.currentTimeMillis())
++            .option(STREAM_RESULTS, "true")
++            .deleteWith(s -> {})
++            .execute();
+     assertThat(result3.orphanFileLocations())
++        .as("Streaming dry run should find 1 file")
++        .isEqualTo(invalidFiles);
++    assertThat(fs.exists(new Path(invalidFiles.get(0))))
++        .as("Invalid file should be present after streaming dry run")
++        .isTrue();
++
++    DeleteOrphanFiles.Result result4 =
++        actions.deleteOrphanFiles(table).olderThan(System.currentTimeMillis()).execute();
++    assertThat(result4.orphanFileLocations())
+         .as("Action should delete 1 file")
+         .isEqualTo(invalidFiles);
+     assertThat(fs.exists(new Path(invalidFiles.get(0))))

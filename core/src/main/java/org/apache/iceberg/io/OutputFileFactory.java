@@ -31,9 +31,11 @@ import org.apache.iceberg.StructLike;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.encryption.EncryptedOutputFile;
 import org.apache.iceberg.encryption.EncryptionManager;
+import org.apache.iceberg.relocated.com.google.common.collect.Maps;
 
 /** Factory responsible for generating unique but recognizable data/delete file names. */
 public class OutputFileFactory {
+  public static final String FILE_REPLICATION_FACTOR = "file-replication-factor";
   private final PartitionSpec defaultSpec;
   private final FileFormat format;
   private final LocationProvider locations;
@@ -49,6 +51,7 @@ public class OutputFileFactory {
   private final String operationId;
   private final AtomicInteger fileCount = new AtomicInteger(0);
   private final String suffix;
+  private final Optional<Short> replicationFactor;
 
   /**
    * Constructor with specific operationId. The [partitionId, taskId, operationId] triplet has to be
@@ -64,6 +67,7 @@ public class OutputFileFactory {
    * @param taskId Second part of the file name
    * @param operationId Third part of the file name
    * @param suffix Suffix part of the file name
+   * @param replicationFactor the replication factor of output file
    */
   private OutputFileFactory(
       PartitionSpec spec,
@@ -74,7 +78,8 @@ public class OutputFileFactory {
       int partitionId,
       long taskId,
       String operationId,
-      String suffix) {
+      String suffix,
+      Optional<Short> replicationFactor) {
     this.defaultSpec = spec;
     this.format = format;
     this.locations = locations;
@@ -84,6 +89,7 @@ public class OutputFileFactory {
     this.taskId = taskId;
     this.operationId = operationId;
     this.suffix = suffix;
+    this.replicationFactor = replicationFactor;
   }
 
   public static Builder builderFor(Table table, int partitionId, long taskId) {
@@ -104,8 +110,23 @@ public class OutputFileFactory {
 
   /** Generates an {@link EncryptedOutputFile} for unpartitioned writes. */
   public EncryptedOutputFile newOutputFile() {
-    OutputFile file = ioSupplier.get().newOutputFile(locations.newDataLocation(generateFilename()));
+    OutputFile file;
+    if (replicationFactor.isPresent()) {
+      file =
+          ioSupplier
+              .get()
+              .newOutputFile(locations.newDataLocation(generateFilename()), getProperties());
+    } else {
+      file = ioSupplier.get().newOutputFile(locations.newDataLocation(generateFilename()));
+    }
     return encryptionManager.encrypt(file);
+  }
+
+  private Map<String, String> getProperties() {
+    Map<String, String> properties = Maps.newHashMap();
+    replicationFactor.ifPresent(
+        replication -> properties.put(FILE_REPLICATION_FACTOR, String.valueOf(replication)));
+    return properties;
   }
 
   /** Generates an {@link EncryptedOutputFile} for partitioned writes in the default spec. */
@@ -116,7 +137,12 @@ public class OutputFileFactory {
   /** Generates an {@link EncryptedOutputFile} for partitioned writes in a given spec. */
   public EncryptedOutputFile newOutputFile(PartitionSpec spec, StructLike partition) {
     String newDataLocation = locations.newDataLocation(spec, partition, generateFilename());
-    OutputFile rawOutputFile = ioSupplier.get().newOutputFile(newDataLocation);
+    OutputFile rawOutputFile;
+    if (replicationFactor.isPresent()) {
+      rawOutputFile = ioSupplier.get().newOutputFile(newDataLocation, getProperties());
+    } else {
+      rawOutputFile = ioSupplier.get().newOutputFile(newDataLocation);
+    }
     return encryptionManager.encrypt(rawOutputFile);
   }
 
@@ -129,6 +155,7 @@ public class OutputFileFactory {
     private FileFormat format;
     private String suffix;
     private Supplier<FileIO> ioSupplier;
+    private Optional<Short> replicationFactorOptional = Optional.empty();
 
     private Builder(Table table, int partitionId, long taskId) {
       this.table = table;
@@ -150,6 +177,13 @@ public class OutputFileFactory {
 
     public Builder operationId(String newOperationId) {
       this.operationId = newOperationId;
+      return this;
+    }
+
+    public Builder replicationFactor(short replicationFactor) {
+      if (replicationFactor > 0) {
+        this.replicationFactorOptional = Optional.of(replicationFactor);
+      }
       return this;
     }
 
@@ -187,7 +221,8 @@ public class OutputFileFactory {
           partitionId,
           taskId,
           operationId,
-          suffix);
+          suffix,
+          replicationFactorOptional);
     }
   }
 }

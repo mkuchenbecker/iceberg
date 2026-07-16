@@ -1,0 +1,9 @@
+diff a/spark/v3.4/spark/src/main/java/org/apache/iceberg/spark/source/SparkPositionDeletesRewrite.java b/spark/v3.4/spark/src/main/java/org/apache/iceberg/spark/source/SparkPositionDeletesRewrite.java	(rejected hunks)
+@@ -222,6 +228,7 @@ public class SparkPositionDeletesRewrite implements Write {
+               .format(format)
+               .operationId(queryId)
+               .suffix("deletes")
++              .replicationFactor(replicationFactor)
+               .build();
+ 
+       Schema positionDeleteRowSchema = positionDeleteRowSchema();

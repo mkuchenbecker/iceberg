@@ -93,6 +93,7 @@ abstract class SparkWrite implements Write, RequiresDistributionAndOrdering {
   private final FileFormat format;
   private final String applicationId;
   private final String applicationName;
+  private final short deleteFileReplication; // [openhouse #219]
   private final boolean wapEnabled;
   private final String wapId;
   private final int outputSpecId;

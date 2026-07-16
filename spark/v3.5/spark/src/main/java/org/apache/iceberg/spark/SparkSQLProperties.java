@@ -42,6 +42,9 @@ public class SparkSQLProperties {
   // table-property levels are upstream in 1.10: SparkWriteOptions/TableProperties.DELETE_FILE_REPLICATION)
   public static final String DELETE_FILE_REPLICATION = "spark.sql.iceberg.delete-file-replication";
 
+  // [openhouse #228] session-level split-size override
+  public static final String SPLIT_SIZE = "spark.sql.iceberg.split-size";
+
   // Controls whether to preserve the existing grouping of data while planning splits
   public static final String PRESERVE_DATA_GROUPING =
       "spark.sql.iceberg.planning.preserve-data-grouping";

@@ -264,8 +264,11 @@ public class DeleteOrphanFilesSparkAction extends BaseSparkAction<DeleteOrphanFi
     Dataset<FileURI> actualFileIdentDS = actualFileIdentDS();
     Dataset<FileURI> validFileIdentDS = validFileIdentDS();
 
+    // [openhouse #234] findOrphanFiles returns a Dataset; collect for the existing delete path.
+    // NOTE: the stream-results streaming optimization (deleteFiles(Dataset)+unpersist) is not
+    // fully wired here; correctness preserved, optimization TODO.
     List<String> orphanFiles =
-        findOrphanFiles(spark(), actualFileIdentDS, validFileIdentDS, prefixMismatchMode);
+        findOrphanFiles(actualFileIdentDS, validFileIdentDS, prefixMismatchMode).collectAsList();
 
     if (deleteFunc == null && table.io() instanceof SupportsBulkOperations) {
       deleteFiles((SupportsBulkOperations) table.io(), orphanFiles);

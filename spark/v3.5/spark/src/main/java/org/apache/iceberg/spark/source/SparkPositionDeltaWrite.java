@@ -106,6 +106,7 @@ class SparkPositionDeltaWrite implements DeltaWrite, RequiresDistributionAndOrde
   private final IsolationLevel isolationLevel;
   private final String applicationId;
   private final String applicationName;
+  private final short replicationFactor; // [openhouse #219]
   private final boolean wapEnabled;
   private final String wapId;
   private final String branch;
@@ -183,7 +184,8 @@ class SparkPositionDeltaWrite implements DeltaWrite, RequiresDistributionAndOrde
           broadcastRewritableDeletes(),
           command,
           context,
-          writeProperties);
+          writeProperties,
+          replicationFactor);
     }
 
     private Broadcast<Map<String, DeleteFileSet>> broadcastRewritableDeletes() {
@@ -397,18 +399,21 @@ class SparkPositionDeltaWrite implements DeltaWrite, RequiresDistributionAndOrde
     private final Command command;
     private final Context context;
     private final Map<String, String> writeProperties;
+    private final short replicationFactor; // [openhouse #219]
 
     PositionDeltaWriteFactory(
         Broadcast<Table> tableBroadcast,
         Broadcast<Map<String, DeleteFileSet>> rewritableDeletesBroadcast,
         Command command,
         Context context,
-        Map<String, String> writeProperties) {
+        Map<String, String> writeProperties,
+        short replicationFactor) {
       this.tableBroadcast = tableBroadcast;
       this.rewritableDeletesBroadcast = rewritableDeletesBroadcast;
       this.command = command;
       this.context = context;
       this.writeProperties = writeProperties;
+      this.replicationFactor = replicationFactor;
     }
 
     @Override

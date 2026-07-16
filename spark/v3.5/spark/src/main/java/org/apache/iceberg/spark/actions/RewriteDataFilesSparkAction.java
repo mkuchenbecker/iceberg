@@ -90,6 +90,7 @@ public class RewriteDataFilesSparkAction
 
   private Expression filter = Expressions.alwaysTrue();
   private int maxConcurrentFileGroupRewrites;
+  private long maxTotalFilesSizeBytes; // [openhouse #189] budgeted rewrite
   private int maxCommits;
   private int maxFailedCommits;
   private boolean partialProgressEnabled;

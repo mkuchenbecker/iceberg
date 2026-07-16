@@ -1,9 +1,0 @@
-diff a/spark/v3.5/spark/src/main/java/org/apache/iceberg/spark/source/SparkPositionDeletesRewrite.java b/spark/v3.5/spark/src/main/java/org/apache/iceberg/spark/source/SparkPositionDeletesRewrite.java	(rejected hunks)
-@@ -221,6 +227,7 @@ public class SparkPositionDeletesRewrite implements Write {
-           OutputFileFactory.builderFor(table, partitionId, taskId)
-               .format(format)
-               .operationId(queryId)
-+              .replicationFactor(replicationFactor)
-               .suffix("deletes")
-               .build();
- 

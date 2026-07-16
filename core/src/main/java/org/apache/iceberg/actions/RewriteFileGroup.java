@@ -114,8 +114,23 @@ public class RewriteFileGroup extends RewriteGroupBase<FileGroupInfo, FileScanTa
         return Comparator.comparing(RewriteFileGroup::inputFileNum);
       case FILES_DESC:
         return Comparator.comparing(RewriteFileGroup::inputFileNum, Comparator.reverseOrder());
+      case FILES_MIN_SEQUENCE_NUMBER_ASC: // [openhouse #189]
+        return Comparator.comparing(RewriteFileGroup::minFileSequenceNumber);
+      case FILES_MIN_SEQUENCE_NUMBER_DESC: // [openhouse #189]
+        return Comparator.comparing(
+            RewriteFileGroup::minFileSequenceNumber, Comparator.reverseOrder());
       default:
         return (unused, unused2) -> 0;
     }
+  }
+
+  // [openhouse #189] used by budgeted rewrite ordering (files-min-sequence-number-*)
+  public long minFileSequenceNumber() {
+    return fileScanTasks().stream()
+        .map(t -> t.file().fileSequenceNumber())
+        .filter(java.util.Objects::nonNull)
+        .mapToLong(Long::longValue)
+        .min()
+        .orElse(0L);
   }
 }

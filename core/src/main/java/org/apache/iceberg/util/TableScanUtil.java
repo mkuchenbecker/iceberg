@@ -23,6 +23,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
 import org.apache.iceberg.BaseCombinedScanTask;
+import org.apache.iceberg.ContentScanTask;
 import org.apache.iceberg.BaseScanTaskGroup;
 import org.apache.iceberg.CombinedScanTask;
 import org.apache.iceberg.FileContent;
@@ -114,9 +115,49 @@ public class TableScanUtil {
         planTaskGroups(CloseableIterable.withNoopClose(tasks), splitSize, lookback, openFileCost));
   }
 
+  /**
+   * Plans task groups using data-only file size (ContentScanTask::length) as the weight, ignoring
+   * delete file sizes. For non-ContentScanTask tasks, falls back to sizeBytes().
+   */
+  public static <T extends ScanTask> List<ScanTaskGroup<T>> planTaskGroupsWithDataSize(
+      List<T> tasks, long splitSize, int lookback, long openFileCost) {
+    Function<T, Long> weightFunc =
+        task -> {
+          long dataSize =
+              task instanceof ContentScanTask
+                  ? ((ContentScanTask<?>) task).length()
+                  : task.sizeBytes();
+          return Math.max(dataSize, task.filesCount() * openFileCost);
+        };
+    return planTaskGroups(tasks, splitSize, lookback, openFileCost, weightFunc);
+  }
+
+  public static <T extends ScanTask> List<ScanTaskGroup<T>> planTaskGroups(
+      List<T> tasks,
+      long splitSize,
+      int lookback,
+      long openFileCost,
+      Function<T, Long> weightFunc) {
+    return Lists.newArrayList(
+        planTaskGroups(
+            CloseableIterable.withNoopClose(tasks), splitSize, lookback, openFileCost, weightFunc));
+  }
+
   @SuppressWarnings("unchecked")
   public static <T extends ScanTask> CloseableIterable<ScanTaskGroup<T>> planTaskGroups(
       CloseableIterable<T> tasks, long splitSize, int lookback, long openFileCost) {
+    Function<T, Long> defaultWeightFunc =
+        task -> Math.max(task.sizeBytes(), task.filesCount() * openFileCost);
+    return planTaskGroups(tasks, splitSize, lookback, openFileCost, defaultWeightFunc);
+  }
+
+  @SuppressWarnings("unchecked")
+  public static <T extends ScanTask> CloseableIterable<ScanTaskGroup<T>> planTaskGroups(
+      CloseableIterable<T> tasks,
+      long splitSize,
+      int lookback,
+      long openFileCost,
+      Function<T, Long> weightFunc) {
 
     validatePlanningArguments(splitSize, lookback, openFileCost);
 
@@ -133,9 +174,6 @@ public class TableScanUtil {
                       }
                     }),
             tasks);
-
-    Function<T, Long> weightFunc =
-        task -> Math.max(task.sizeBytes(), task.filesCount() * openFileCost);
 
     return CloseableIterable.transform(
         CloseableIterable.combine(

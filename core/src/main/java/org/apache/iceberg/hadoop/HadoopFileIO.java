@@ -103,6 +103,12 @@ public class HadoopFileIO implements HadoopConfigurable, DelegateFileIO {
   }
 
   @Override
+  public OutputFile newOutputFile(String path, Map<String, String> fileProperties) {
+    // [openhouse #219] honor file-replication-factor when creating the output file
+    return HadoopOutputFile.fromPath(new Path(path), getConf(), fileProperties);
+  }
+
+  @Override
   public void deleteFile(String path) {
     Path toDelete = new Path(path);
     FileSystem fs = Util.getFs(toDelete, getConf());

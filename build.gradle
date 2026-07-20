@@ -108,7 +108,7 @@ if (file("${rootDir}/iceberg-build.properties").exists()) {
   }
 }
 
-def projectVersion = getProjectVersion()
+def projectVersion = System.getProperty("forceVersion") ?: getProjectVersion()
 final REVAPI_PROJECTS = ["iceberg-api", "iceberg-core", "iceberg-parquet", "iceberg-orc", "iceberg-common", "iceberg-data"]
 
 allprojects {

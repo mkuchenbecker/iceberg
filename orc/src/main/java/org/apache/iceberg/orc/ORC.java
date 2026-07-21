@@ -825,6 +825,23 @@ public class ORC {
       throw new RuntimeIOException(ioe, "Can't create file %s", locPath);
     }
 
+    // [openhouse #219] OrcFile.createWriter opens the file with the file system's default
+    // replication (fs.getDefaultReplication), ignoring any per-file replication requested via the
+    // OutputFileFactory. When a custom replication factor is set, apply it to the freshly created
+    // (still empty) file so the data blocks written next use the requested replication.
+    if (file instanceof HadoopOutputFile) {
+      HadoopOutputFile hfile = (HadoopOutputFile) file;
+      short replication = hfile.getReplication();
+      if (replication > 0) {
+        try {
+          hfile.getFileSystem().setReplication(locPath, replication);
+        } catch (IOException ioe) {
+          throw new RuntimeIOException(
+              ioe, "Can't set replication factor %d for file %s", replication, locPath);
+        }
+      }
+    }
+
     metadata.forEach((key, value) -> writer.addUserMetadata(key, ByteBuffer.wrap(value)));
 
     return writer;

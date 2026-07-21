@@ -157,6 +157,18 @@ public class HadoopOutputFile implements OutputFile, NativelyEncryptedFile {
     return fs;
   }
 
+  /**
+   * Returns the custom HDFS replication factor for this output file, or a non-positive value when
+   * none was requested (in which case the file system default replication is used).
+   *
+   * <p>[openhouse #219] Exposed so format writers that bypass {@link #create()} (e.g. Parquet's
+   * native {@code HadoopOutputFile} and ORC's {@code OrcFile.createWriter}, which otherwise take
+   * the file system default replication) can still honor the requested per-file replication.
+   */
+  public short getReplication() {
+    return replication;
+  }
+
   @Override
   public String location() {
     return path.toString();

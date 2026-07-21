@@ -69,6 +69,13 @@ class ParquetIO {
   static OutputFile file(org.apache.iceberg.io.OutputFile file) {
     if (file instanceof HadoopOutputFile) {
       HadoopOutputFile hfile = (HadoopOutputFile) file;
+      // [openhouse #219] When a custom replication factor is requested, route through
+      // ParquetOutputFile so that iceberg's HadoopOutputFile.create() (which passes the
+      // replication to fs.create) is used. The native parquet HadoopOutputFile below opens the
+      // file with the file system's default replication, silently dropping the override.
+      if (hfile.getReplication() > 0) {
+        return new ParquetOutputFile(file);
+      }
       try {
         return org.apache.parquet.hadoop.util.HadoopOutputFile.fromPath(
             hfile.getPath(), hfile.getConf());
@@ -83,6 +90,13 @@ class ParquetIO {
   static OutputFile file(org.apache.iceberg.io.OutputFile file, Configuration conf) {
     if (file instanceof HadoopOutputFile) {
       HadoopOutputFile hfile = (HadoopOutputFile) file;
+      // [openhouse #219] When a custom replication factor is requested, route through
+      // ParquetOutputFile so that iceberg's HadoopOutputFile.create() (which passes the
+      // replication to fs.create) is used. The native parquet HadoopOutputFile below opens the
+      // file with the file system's default replication, silently dropping the override.
+      if (hfile.getReplication() > 0) {
+        return new ParquetOutputFile(file);
+      }
       try {
         return org.apache.parquet.hadoop.util.HadoopOutputFile.fromPath(hfile.getPath(), conf);
       } catch (IOException e) {

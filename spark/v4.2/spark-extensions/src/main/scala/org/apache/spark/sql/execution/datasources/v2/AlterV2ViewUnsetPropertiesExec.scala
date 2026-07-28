@@ -18,12 +18,14 @@
  */
 package org.apache.spark.sql.execution.datasources.v2
 
+import java.util.Collections
+import org.apache.iceberg.spark.SupportsViewChanges
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.IcebergAnalysisException
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.connector.catalog.Identifier
 import org.apache.spark.sql.connector.catalog.ViewCatalog
-import org.apache.spark.sql.connector.catalog.ViewChange
+import scala.jdk.CollectionConverters._
 
 case class AlterV2ViewUnsetPropertiesExec(
     catalog: ViewCatalog,
@@ -41,8 +43,16 @@ case class AlterV2ViewUnsetPropertiesExec(
       }
     }
 
-    val changes = propertyKeys.map(ViewChange.removeProperty)
-    catalog.alterView(ident, changes: _*)
+    catalog match {
+      case c: SupportsViewChanges =>
+        c.alterView(
+          ident,
+          Collections.emptyMap[String, String](),
+          propertyKeys.toSet.asJava)
+      case _ =>
+        throw new UnsupportedOperationException(
+          s"Altering a view is not supported by catalog: ${catalog.name}")
+    }
 
     Nil
   }

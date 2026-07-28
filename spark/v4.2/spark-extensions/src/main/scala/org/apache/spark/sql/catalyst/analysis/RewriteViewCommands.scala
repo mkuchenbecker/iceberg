@@ -60,6 +60,8 @@ case class RewriteViewCommands(spark: SparkSession) extends Rule[LogicalPlan] wi
           query,
           allowExisting,
           replace,
+          _,
+          _,
           _) =>
       val q = CTESubstitution.apply(query)
       verifyTemporaryObjectsDontExist(resolved, q)

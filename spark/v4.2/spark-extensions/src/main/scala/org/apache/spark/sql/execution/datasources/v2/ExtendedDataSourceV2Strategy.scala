@@ -155,17 +155,22 @@ case class ExtendedDataSourceV2Strategy(spark: SparkSession) extends Strategy wi
         allowExisting = allowExisting,
         replace = replace) :: Nil
 
-    case DescribeRelation(ResolvedV2View(catalog, ident), _, isExtended, output) =>
-      DescribeV2ViewExec(output, catalog.loadView(ident), isExtended) :: Nil
+    case DescribeRelation(ResolvedV2View(catalog, ident), isExtended, output) =>
+      DescribeV2ViewExec(output, catalog.loadView(ident), viewName(catalog, ident), isExtended) ::
+        Nil
 
     case ShowTableProperties(ResolvedV2View(catalog, ident), propertyKey, output) =>
-      ShowV2ViewPropertiesExec(output, catalog.loadView(ident), propertyKey) :: Nil
+      ShowV2ViewPropertiesExec(
+        output,
+        catalog.loadView(ident),
+        viewName(catalog, ident),
+        propertyKey) :: Nil
 
     case ShowIcebergViews(ResolvedNamespace(catalog: ViewCatalog, namespace, _), pattern, output) =>
       ShowV2ViewsExec(output, catalog, namespace, pattern) :: Nil
 
     case ShowCreateTable(ResolvedV2View(catalog, ident), _, output) =>
-      ShowCreateV2ViewExec(output, catalog.loadView(ident)) :: Nil
+      ShowCreateV2ViewExec(output, catalog.loadView(ident), viewName(catalog, ident)) :: Nil
 
     case SetViewProperties(ResolvedV2View(catalog, ident), properties) =>
       AlterV2ViewSetPropertiesExec(catalog, ident, properties) :: Nil
@@ -174,6 +179,10 @@ case class ExtendedDataSourceV2Strategy(spark: SparkSession) extends Strategy wi
       AlterV2ViewUnsetPropertiesExec(catalog, ident, propertyKeys, ifExists) :: Nil
 
     case _ => Nil
+  }
+
+  private def viewName(catalog: ViewCatalog, ident: Identifier): String = {
+    (catalog.name +: ident.namespace.toSeq :+ ident.name).mkString(".")
   }
 
   private object IcebergCatalogAndIdentifier {

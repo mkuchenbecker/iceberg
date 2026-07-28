@@ -19,7 +19,6 @@
 package org.apache.spark.sql.catalyst.analysis
 
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.FunctionIdentifier
 import org.apache.spark.sql.catalyst.analysis.ViewUtil.IcebergViewHelper
 import org.apache.spark.sql.catalyst.expressions.Alias
 import org.apache.spark.sql.catalyst.expressions.SubqueryExpression
@@ -56,7 +55,7 @@ case class ResolveViews(spark: SparkSession) extends Rule[LogicalPlan] with Look
         .map(createViewRelation(parts, _))
         .getOrElse(u)
 
-    case u @ UnresolvedTableOrView(CatalogAndIdentifier(catalog, ident), _, _) =>
+    case u @ UnresolvedTableOrView(CatalogAndIdentifier(catalog, ident), _, _, _) =>
       ViewUtil
         .loadView(catalog, ident)
         .map(_ => ResolvedV2View(catalog.asViewCatalog, ident))
@@ -103,7 +102,7 @@ case class ResolveViews(spark: SparkSession) extends Rule[LogicalPlan] with Look
   }
 
   private def createViewRelation(nameParts: Seq[String], view: View): LogicalPlan = {
-    val parsed = parseViewText(nameParts.quoted, view.query)
+    val parsed = parseViewText(nameParts.quoted, view.queryText)
 
     // Apply any necessary rewrites to preserve correct resolution
     val viewCatalogAndNamespace: Seq[String] = view.currentCatalog +: view.currentNamespace.toSeq
@@ -178,6 +177,6 @@ case class ResolveViews(spark: SparkSession) extends Rule[LogicalPlan] with Look
   }
 
   private def isBuiltinFunction(name: String): Boolean = {
-    catalogManager.v1SessionCatalog.isBuiltinFunction(FunctionIdentifier(name))
+    catalogManager.v1SessionCatalog.isBuiltinFunction(name)
   }
 }

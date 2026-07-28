@@ -80,8 +80,6 @@ import org.apache.spark.sql.connector.catalog.TableChange.ColumnChange;
 import org.apache.spark.sql.connector.catalog.TableChange.RemoveProperty;
 import org.apache.spark.sql.connector.catalog.TableChange.SetProperty;
 import org.apache.spark.sql.connector.catalog.View;
-import org.apache.spark.sql.connector.catalog.ViewChange;
-import org.apache.spark.sql.connector.catalog.ViewInfo;
 import org.apache.spark.sql.connector.expressions.Transform;
 import org.apache.spark.sql.types.StructType;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
@@ -115,7 +113,7 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap;
  *
  * <p>
  */
-public class SparkCatalog extends BaseCatalog {
+public class SparkCatalog extends BaseCatalog implements SupportsViewChanges {
   private static final Set<String> DEFAULT_NS_KEYS = ImmutableSet.of(TableCatalog.PROP_OWNER);
   private static final Splitter COMMA = Splitter.on(",");
   private static final Joiner COMMA_JOINER = Joiner.on(",");
@@ -515,7 +513,7 @@ public class SparkCatalog extends BaseCatalog {
     if (null != asViewCatalog) {
       try {
         org.apache.iceberg.view.View view = asViewCatalog.loadView(buildIdentifier(ident));
-        return new SparkView(catalogName, view);
+        return SparkView.asSparkView(catalogName, view);
       } catch (org.apache.iceberg.exceptions.NoSuchViewException e) {
         throw new NoSuchViewException(ident);
       }
@@ -525,36 +523,32 @@ public class SparkCatalog extends BaseCatalog {
   }
 
   @Override
-  public View createView(ViewInfo viewInfo)
+  public View createView(Identifier ident, View view)
       throws ViewAlreadyExistsException, NoSuchNamespaceException {
-    if (null != asViewCatalog && viewInfo != null) {
-      Identifier ident = viewInfo.ident();
-      String sql = viewInfo.sql();
-      String currentCatalog = viewInfo.currentCatalog();
-      String[] currentNamespace = viewInfo.currentNamespace();
-      StructType schema = viewInfo.schema();
-      String[] queryColumnNames = viewInfo.queryColumnNames();
-      Map<String, String> properties = viewInfo.properties();
-      Schema icebergSchema = SparkSchemaUtil.convert(schema);
+    if (null != asViewCatalog && view != null) {
+      String currentCatalog = view.currentCatalog();
+      String[] currentNamespace = view.currentNamespace();
+      Map<String, String> properties = view.properties();
+      Schema icebergSchema = SparkSchemaUtil.convert(view.schema());
 
       try {
         Map<String, String> props =
             ImmutableMap.<String, String>builder()
                 .putAll(Spark3Util.rebuildCreateProperties(properties))
-                .put(SparkView.QUERY_COLUMN_NAMES, COMMA_JOINER.join(queryColumnNames))
+                .put(SparkView.QUERY_COLUMN_NAMES, COMMA_JOINER.join(view.queryColumnNames()))
                 .buildKeepingLast();
 
-        org.apache.iceberg.view.View view =
+        org.apache.iceberg.view.View icebergView =
             asViewCatalog
                 .buildView(buildIdentifier(ident))
                 .withDefaultCatalog(currentCatalog)
                 .withDefaultNamespace(Namespace.of(currentNamespace))
-                .withQuery("spark", sql)
+                .withQuery("spark", view.queryText())
                 .withSchema(icebergSchema)
                 .withLocation(properties.get("location"))
                 .withProperties(props)
                 .create();
-        return new SparkView(catalogName, view);
+        return SparkView.asSparkView(catalogName, icebergView);
       } catch (org.apache.iceberg.exceptions.NoSuchNamespaceException e) {
         throw new NoSuchNamespaceException(currentNamespace);
       } catch (AlreadyExistsException e) {
@@ -567,40 +561,31 @@ public class SparkCatalog extends BaseCatalog {
   }
 
   @Override
-  public View replaceView(
-      Identifier ident,
-      String sql,
-      String currentCatalog,
-      String[] currentNamespace,
-      StructType schema,
-      String[] queryColumnNames,
-      String[] columnAliases,
-      String[] columnComments,
-      Map<String, String> properties)
-      throws NoSuchNamespaceException, NoSuchViewException {
-    if (null != asViewCatalog) {
-      Schema icebergSchema = SparkSchemaUtil.convert(schema);
+  public View replaceView(Identifier ident, View view) throws NoSuchViewException {
+    if (null != asViewCatalog && view != null) {
+      String currentCatalog = view.currentCatalog();
+      String[] currentNamespace = view.currentNamespace();
+      Map<String, String> properties = view.properties();
+      Schema icebergSchema = SparkSchemaUtil.convert(view.schema());
 
       try {
         Map<String, String> props =
             ImmutableMap.<String, String>builder()
                 .putAll(Spark3Util.rebuildCreateProperties(properties))
-                .put(SparkView.QUERY_COLUMN_NAMES, COMMA_JOINER.join(queryColumnNames))
+                .put(SparkView.QUERY_COLUMN_NAMES, COMMA_JOINER.join(view.queryColumnNames()))
                 .buildKeepingLast();
 
-        org.apache.iceberg.view.View view =
+        org.apache.iceberg.view.View icebergView =
             asViewCatalog
                 .buildView(buildIdentifier(ident))
                 .withDefaultCatalog(currentCatalog)
                 .withDefaultNamespace(Namespace.of(currentNamespace))
-                .withQuery("spark", sql)
+                .withQuery("spark", view.queryText())
                 .withSchema(icebergSchema)
                 .withLocation(properties.get("location"))
                 .withProperties(props)
-                .createOrReplace();
-        return new SparkView(catalogName, view);
-      } catch (org.apache.iceberg.exceptions.NoSuchNamespaceException e) {
-        throw new NoSuchNamespaceException(currentNamespace);
+                .replace();
+        return SparkView.asSparkView(catalogName, icebergView);
       } catch (org.apache.iceberg.exceptions.NoSuchViewException e) {
         throw new NoSuchViewException(ident);
       }
@@ -611,28 +596,29 @@ public class SparkCatalog extends BaseCatalog {
   }
 
   @Override
-  public View alterView(Identifier ident, ViewChange... changes)
-      throws NoSuchViewException, IllegalArgumentException {
+  public View alterView(
+      Identifier ident, Map<String, String> setProperties, Set<String> removeProperties)
+      throws NoSuchViewException {
     if (null != asViewCatalog) {
       try {
         org.apache.iceberg.view.View view = asViewCatalog.loadView(buildIdentifier(ident));
         UpdateViewProperties updateViewProperties = view.updateProperties();
 
-        for (ViewChange change : changes) {
-          if (change instanceof ViewChange.SetProperty) {
-            ViewChange.SetProperty property = (ViewChange.SetProperty) change;
-            verifyNonReservedPropertyIsSet(property.property());
-            updateViewProperties.set(property.property(), property.value());
-          } else if (change instanceof ViewChange.RemoveProperty) {
-            ViewChange.RemoveProperty remove = (ViewChange.RemoveProperty) change;
-            verifyNonReservedPropertyIsUnset(remove.property());
-            updateViewProperties.remove(remove.property());
-          }
-        }
+        setProperties.forEach(
+            (property, value) -> {
+              verifyNonReservedPropertyIsSet(property);
+              updateViewProperties.set(property, value);
+            });
+
+        removeProperties.forEach(
+            property -> {
+              verifyNonReservedPropertyIsUnset(property);
+              updateViewProperties.remove(property);
+            });
 
         updateViewProperties.commit();
 
-        return new SparkView(catalogName, view);
+        return SparkView.asSparkView(catalogName, view);
       } catch (org.apache.iceberg.exceptions.NoSuchViewException e) {
         throw new NoSuchViewException(ident);
       }

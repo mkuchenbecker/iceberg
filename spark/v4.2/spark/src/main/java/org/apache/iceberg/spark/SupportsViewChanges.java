@@ -19,38 +19,29 @@
 package org.apache.iceberg.spark;
 
 import java.util.Map;
-import org.apache.spark.sql.catalyst.analysis.NoSuchNamespaceException;
+import java.util.Set;
 import org.apache.spark.sql.catalyst.analysis.NoSuchViewException;
 import org.apache.spark.sql.connector.catalog.Identifier;
 import org.apache.spark.sql.connector.catalog.View;
 import org.apache.spark.sql.connector.catalog.ViewCatalog;
-import org.apache.spark.sql.types.StructType;
 
-public interface SupportsReplaceView extends ViewCatalog {
+/**
+ * An Iceberg extension to Spark's {@link ViewCatalog} for altering view properties.
+ *
+ * <p>Spark 4.2 removed {@code ViewChange} and {@code ViewCatalog.alterView}, so Iceberg exposes
+ * view property changes through this interface instead.
+ */
+public interface SupportsViewChanges extends ViewCatalog {
   /**
-   * Replace a view in the catalog
+   * Alter a view by setting and/or removing properties.
    *
    * @param ident a view identifier
-   * @param sql the SQL text that defines the view
-   * @param currentCatalog the current catalog
-   * @param currentNamespace the current namespace
-   * @param schema the view query output schema
-   * @param queryColumnNames the query column names
-   * @param columnAliases the column aliases
-   * @param columnComments the column comments
-   * @param properties the view properties
-   * @throws NoSuchViewException If the view doesn't exist or is a table
-   * @throws NoSuchNamespaceException If the identifier namespace does not exist (optional)
+   * @param setProperties properties to set on the view
+   * @param removeProperties property keys to remove from the view
+   * @return the altered view
+   * @throws NoSuchViewException if the view does not exist
    */
-  View replaceView(
-      Identifier ident,
-      String sql,
-      String currentCatalog,
-      String[] currentNamespace,
-      StructType schema,
-      String[] queryColumnNames,
-      String[] columnAliases,
-      String[] columnComments,
-      Map<String, String> properties)
-      throws NoSuchViewException, NoSuchNamespaceException;
+  View alterView(
+      Identifier ident, Map<String, String> setProperties, Set<String> removeProperties)
+      throws NoSuchViewException;
 }

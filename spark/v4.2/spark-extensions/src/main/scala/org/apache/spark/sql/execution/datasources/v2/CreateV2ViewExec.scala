@@ -18,14 +18,13 @@
  */
 package org.apache.spark.sql.execution.datasources.v2
 
-import org.apache.iceberg.spark.SupportsReplaceView
 import org.apache.spark.sql.catalyst.InternalRow
-import org.apache.spark.sql.catalyst.analysis.NoSuchViewException
 import org.apache.spark.sql.catalyst.analysis.ViewAlreadyExistsException
+import org.apache.spark.sql.catalyst.analysis.ViewUtil
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.connector.catalog.Identifier
+import org.apache.spark.sql.connector.catalog.View
 import org.apache.spark.sql.connector.catalog.ViewCatalog
-import org.apache.spark.sql.connector.catalog.ViewInfo
 import org.apache.spark.sql.types.StructType
 import scala.jdk.CollectionConverters._
 
@@ -53,33 +52,20 @@ case class CreateV2ViewExec(
 
     val engineVersion = "Spark " + org.apache.spark.SPARK_VERSION
     val newProperties = properties ++
-      comment.map(ViewCatalog.PROP_COMMENT -> _) ++
+      comment.map(ViewUtil.PROP_COMMENT -> _) ++
       Map(
-        ViewCatalog.PROP_CREATE_ENGINE_VERSION -> engineVersion,
-        ViewCatalog.PROP_ENGINE_VERSION -> engineVersion)
+        ViewUtil.PROP_CREATE_ENGINE_VERSION -> engineVersion,
+        ViewUtil.PROP_ENGINE_VERSION -> engineVersion)
+
+    val view = buildView(currentCatalog, currentNamespace, newProperties)
 
     if (replace) {
       // CREATE OR REPLACE VIEW
-      catalog match {
-        case c: SupportsReplaceView =>
-          try {
-            replaceView(c, currentCatalog, currentNamespace, newProperties)
-          } catch {
-            // view might have been concurrently dropped during replace
-            case _: NoSuchViewException =>
-              replaceView(c, currentCatalog, currentNamespace, newProperties)
-          }
-        case _ =>
-          if (catalog.viewExists(ident)) {
-            catalog.dropView(ident)
-          }
-
-          createView(currentCatalog, currentNamespace, newProperties)
-      }
+      catalog.createOrReplaceView(ident, view)
     } else {
       try {
         // CREATE VIEW [IF NOT EXISTS]
-        createView(currentCatalog, currentNamespace, newProperties)
+        catalog.createView(ident, view)
       } catch {
         case _: ViewAlreadyExistsException if allowExisting => // Ignore
       }
@@ -88,38 +74,24 @@ case class CreateV2ViewExec(
     Nil
   }
 
-  private def replaceView(
-      supportsReplaceView: SupportsReplaceView,
+  private def buildView(
       currentCatalog: String,
       currentNamespace: Array[String],
-      newProperties: Map[String, String]) = {
-    supportsReplaceView.replaceView(
-      ident,
-      queryText,
-      currentCatalog,
-      currentNamespace,
-      viewSchema,
-      queryColumnNames.toArray,
-      columnAliases.toArray,
-      columnComments.map(c => c.orNull).toArray,
-      newProperties.asJava)
-  }
-
-  private def createView(
-      currentCatalog: String,
-      currentNamespace: Array[String],
-      newProperties: Map[String, String]) = {
-    val viewInfo: ViewInfo = new ViewInfo(
-      ident,
-      queryText,
-      currentCatalog,
-      currentNamespace,
-      viewSchema,
-      queryColumnNames.toArray,
-      columnAliases.toArray,
-      columnComments.map(c => c.orNull).toArray,
-      newProperties.asJava)
-    catalog.createView(viewInfo)
+      newProperties: Map[String, String]): View = {
+    // Use statement-per-setter because the inherited RelationBuilder setters are declared in a
+    // package-private class whose static return type cannot be named from this package.
+    val builder = new View.Builder()
+    builder.withSchema(viewSchema)
+    builder.withProperties(newProperties.asJava)
+    builder.withQueryText(queryText)
+    builder.withCurrentCatalog(currentCatalog)
+    builder.withCurrentNamespace(currentNamespace)
+    builder.withQueryColumnNames(queryColumnNames.toArray)
+    comment.foreach { c =>
+      builder.withComment(c)
+      ()
+    }
+    builder.build()
   }
 
   override def simpleString(maxFields: Int): String = {

@@ -19,20 +19,24 @@
 package org.apache.spark.sql.execution.datasources.v2
 
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.analysis.ViewUtil
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.connector.catalog.View
-import org.apache.spark.sql.connector.catalog.ViewCatalog
 import org.apache.spark.sql.execution.LeafExecNode
 import scala.jdk.CollectionConverters._
 
-case class ShowV2ViewPropertiesExec(output: Seq[Attribute], view: View, propertyKey: Option[String])
+case class ShowV2ViewPropertiesExec(
+    output: Seq[Attribute],
+    view: View,
+    viewName: String,
+    propertyKey: Option[String])
     extends V2CommandExec
     with LeafExecNode {
 
   override protected def run(): Seq[InternalRow] = {
     propertyKey match {
       case Some(p) =>
-        val propValue = properties.getOrElse(p, s"View ${view.name()} does not have property: $p")
+        val propValue = properties.getOrElse(p, s"View ${viewName} does not have property: $p")
         Seq(toCatalystRow(p, propValue))
       case None =>
         properties.map { case (k, v) =>
@@ -42,7 +46,7 @@ case class ShowV2ViewPropertiesExec(output: Seq[Attribute], view: View, property
   }
 
   private def properties = {
-    view.properties.asScala.toMap -- ViewCatalog.RESERVED_PROPERTIES.asScala
+    view.properties.asScala.toMap -- ViewUtil.RESERVED_PROPERTIES
   }
 
   override def simpleString(maxFields: Int): String = {

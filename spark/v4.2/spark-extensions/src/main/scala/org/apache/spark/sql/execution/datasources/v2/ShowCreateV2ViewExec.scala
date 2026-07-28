@@ -19,24 +19,24 @@
 package org.apache.spark.sql.execution.datasources.v2
 
 import org.apache.spark.sql.catalyst.InternalRow
+import org.apache.spark.sql.catalyst.analysis.ViewUtil
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.catalyst.util.escapeSingleQuotedString
 import org.apache.spark.sql.connector.catalog.View
-import org.apache.spark.sql.connector.catalog.ViewCatalog
 import org.apache.spark.sql.execution.LeafExecNode
 import scala.jdk.CollectionConverters._
 
-case class ShowCreateV2ViewExec(output: Seq[Attribute], view: View)
+case class ShowCreateV2ViewExec(output: Seq[Attribute], view: View, viewName: String)
     extends V2CommandExec
     with LeafExecNode {
 
   override protected def run(): Seq[InternalRow] = {
     val builder = new StringBuilder
-    builder ++= s"CREATE VIEW ${view.name} "
+    builder ++= s"CREATE VIEW ${viewName} "
     showColumns(view, builder)
     showComment(view, builder)
     showProperties(view, builder)
-    builder ++= s"AS\n${view.query}\n"
+    builder ++= s"AS\n${view.queryText}\n"
 
     Seq(toCatalystRow(builder.toString))
   }
@@ -51,13 +51,13 @@ case class ShowCreateV2ViewExec(output: Seq[Attribute], view: View)
   }
 
   private def showComment(view: View, builder: StringBuilder): Unit = {
-    Option(view.properties.get(ViewCatalog.PROP_COMMENT))
+    Option(view.properties.get(ViewUtil.PROP_COMMENT))
       .map("COMMENT '" + escapeSingleQuotedString(_) + "'\n")
       .foreach(builder.append)
   }
 
   private def showProperties(view: View, builder: StringBuilder): Unit = {
-    val showProps = view.properties.asScala.toMap -- ViewCatalog.RESERVED_PROPERTIES.asScala
+    val showProps = view.properties.asScala.toMap -- ViewUtil.RESERVED_PROPERTIES
     if (showProps.nonEmpty) {
       val props = conf.redactOptions(showProps).toSeq.sortBy(_._1).map { case (key, value) =>
         s"'${escapeSingleQuotedString(key)}' = '${escapeSingleQuotedString(value)}'"

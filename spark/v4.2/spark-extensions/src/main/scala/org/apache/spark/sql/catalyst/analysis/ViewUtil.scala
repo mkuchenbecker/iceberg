@@ -25,6 +25,15 @@ import org.apache.spark.sql.connector.catalog.ViewCatalog
 import org.apache.spark.sql.errors.QueryCompilationErrors
 
 object ViewUtil {
+  // View property constants that were removed from Spark's ViewCatalog in Spark 4.2.
+  // Kept here to preserve the property names Iceberg writes into view metadata.
+  val PROP_COMMENT: String = "comment"
+  val PROP_OWNER: String = "owner"
+  val PROP_CREATE_ENGINE_VERSION: String = "create_engine_version"
+  val PROP_ENGINE_VERSION: String = "engine_version"
+  val RESERVED_PROPERTIES: Seq[String] =
+    Seq(PROP_COMMENT, PROP_OWNER, PROP_CREATE_ENGINE_VERSION, PROP_ENGINE_VERSION)
+
   def loadView(catalog: CatalogPlugin, ident: Identifier): Option[View] = catalog match {
     case viewCatalog: ViewCatalog =>
       try {

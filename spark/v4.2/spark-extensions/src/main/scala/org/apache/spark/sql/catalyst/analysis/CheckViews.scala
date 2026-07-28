@@ -60,7 +60,7 @@ object CheckViews extends (LogicalPlan => Unit) {
           checkCyclicViewReference(viewIdent, query, Seq(viewIdent))
         }
 
-      case AlterViewAs(ResolvedV2View(_, _), _, _) =>
+      case AlterViewAs(ResolvedV2View(_, _), _, _, _, _) =>
         throw new IcebergAnalysisException(
           "ALTER VIEW <viewName> AS is not supported. Use CREATE OR REPLACE VIEW instead")
 

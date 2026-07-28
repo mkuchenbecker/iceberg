@@ -65,9 +65,8 @@ import org.apache.spark.sql.catalyst.util.GenericArrayData;
 import org.apache.spark.sql.catalyst.util.MapData;
 import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.Decimal;
+import org.apache.spark.unsafe.types.BinaryView;
 import org.apache.spark.unsafe.types.CalendarInterval;
-import org.apache.spark.unsafe.types.GeographyVal;
-import org.apache.spark.unsafe.types.GeometryVal;
 import org.apache.spark.unsafe.types.UTF8String;
 import org.apache.spark.unsafe.types.VariantVal;
 
@@ -782,13 +781,8 @@ public class SparkParquetReaders {
     }
 
     @Override
-    public GeographyVal getGeography(int ordinal) {
-      return (GeographyVal) values[ordinal];
-    }
-
-    @Override
-    public GeometryVal getGeometry(int ordinal) {
-      return (GeometryVal) values[ordinal];
+    public BinaryView getBinaryView(int ordinal) {
+      return (BinaryView) values[ordinal];
     }
   }
 }

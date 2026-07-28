@@ -19,6 +19,7 @@
 package org.apache.iceberg.spark;
 
 import java.util.Map;
+import java.util.Set;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hive.conf.HiveConf;
 import org.apache.iceberg.CatalogProperties;
@@ -48,8 +49,6 @@ import org.apache.spark.sql.connector.catalog.TableCatalog;
 import org.apache.spark.sql.connector.catalog.TableChange;
 import org.apache.spark.sql.connector.catalog.View;
 import org.apache.spark.sql.connector.catalog.ViewCatalog;
-import org.apache.spark.sql.connector.catalog.ViewChange;
-import org.apache.spark.sql.connector.catalog.ViewInfo;
 import org.apache.spark.sql.connector.catalog.functions.UnboundFunction;
 import org.apache.spark.sql.connector.expressions.Transform;
 import org.apache.spark.sql.types.StructType;
@@ -63,7 +62,7 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap;
  */
 public class SparkSessionCatalog<
         T extends TableCatalog & FunctionCatalog & SupportsNamespaces & ViewCatalog>
-    extends BaseCatalog implements CatalogExtension {
+    extends BaseCatalog implements CatalogExtension, SupportsViewChanges {
   private static final String[] DEFAULT_NAMESPACE = new String[] {"default"};
 
   private String catalogName = null;
@@ -457,16 +456,16 @@ public class SparkSessionCatalog<
   }
 
   @Override
-  public View createView(ViewInfo viewInfo)
+  public View createView(Identifier ident, View view)
       throws ViewAlreadyExistsException, NoSuchNamespaceException {
-    if (viewInfo == null) {
+    if (view == null) {
       return null;
     }
 
     if (null != asViewCatalog) {
-      return asViewCatalog.createView(viewInfo);
+      return asViewCatalog.createView(ident, view);
     } else if (isViewCatalog()) {
-      return getSessionCatalog().createView(viewInfo);
+      return getSessionCatalog().createView(ident, view);
     }
 
     throw new UnsupportedOperationException(
@@ -474,29 +473,11 @@ public class SparkSessionCatalog<
   }
 
   @Override
-  public View replaceView(
-      Identifier ident,
-      String sql,
-      String currentCatalog,
-      String[] currentNamespace,
-      StructType schema,
-      String[] queryColumnNames,
-      String[] columnAliases,
-      String[] columnComments,
-      Map<String, String> properties)
-      throws NoSuchNamespaceException, NoSuchViewException {
-    if (asViewCatalog instanceof SupportsReplaceView) {
-      return ((SupportsReplaceView) asViewCatalog)
-          .replaceView(
-              ident,
-              sql,
-              currentCatalog,
-              currentNamespace,
-              schema,
-              queryColumnNames,
-              columnAliases,
-              columnComments,
-              properties);
+  public View replaceView(Identifier ident, View view) throws NoSuchViewException {
+    if (null != asViewCatalog) {
+      return asViewCatalog.replaceView(ident, view);
+    } else if (isViewCatalog()) {
+      return getSessionCatalog().replaceView(ident, view);
     }
 
     throw new UnsupportedOperationException(
@@ -504,12 +485,15 @@ public class SparkSessionCatalog<
   }
 
   @Override
-  public View alterView(Identifier ident, ViewChange... changes)
-      throws NoSuchViewException, IllegalArgumentException {
-    if (null != asViewCatalog && asViewCatalog.viewExists(ident)) {
-      return asViewCatalog.alterView(ident, changes);
-    } else if (isViewCatalog()) {
-      return getSessionCatalog().alterView(ident, changes);
+  public View alterView(
+      Identifier ident, Map<String, String> setProperties, Set<String> removeProperties)
+      throws NoSuchViewException {
+    if (asViewCatalog instanceof SupportsViewChanges && asViewCatalog.viewExists(ident)) {
+      return ((SupportsViewChanges) asViewCatalog)
+          .alterView(ident, setProperties, removeProperties);
+    } else if (isViewCatalog() && getSessionCatalog() instanceof SupportsViewChanges) {
+      return ((SupportsViewChanges) getSessionCatalog())
+          .alterView(ident, setProperties, removeProperties);
     }
 
     throw new UnsupportedOperationException(

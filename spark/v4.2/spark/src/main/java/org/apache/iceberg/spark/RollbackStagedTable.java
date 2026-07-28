@@ -32,6 +32,7 @@ import org.apache.spark.sql.connector.catalog.TableCapability;
 import org.apache.spark.sql.connector.catalog.TableCatalog;
 import org.apache.spark.sql.connector.expressions.Transform;
 import org.apache.spark.sql.connector.expressions.filter.Predicate;
+import org.apache.spark.sql.connector.metric.CustomTaskMetric;
 import org.apache.spark.sql.connector.read.ScanBuilder;
 import org.apache.spark.sql.connector.write.LogicalWriteInfo;
 import org.apache.spark.sql.connector.write.WriteBuilder;
@@ -103,6 +104,11 @@ public class RollbackStagedTable
   @Override
   public Set<TableCapability> capabilities() {
     return table.capabilities();
+  }
+
+  @Override
+  public CustomTaskMetric[] reportDriverMetrics() {
+    return StagedTable.super.reportDriverMetrics();
   }
 
   @Override

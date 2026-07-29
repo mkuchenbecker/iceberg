@@ -22,11 +22,14 @@ import org.apache.iceberg.spark.procedures.SparkProcedures;
 import org.apache.iceberg.spark.procedures.SparkProcedures.ProcedureBuilder;
 import org.apache.iceberg.spark.source.HasIcebergCatalog;
 import org.apache.iceberg.util.PropertyUtil;
+import org.apache.spark.sql.catalyst.analysis.NoSuchTableException;
+import org.apache.spark.sql.catalyst.analysis.NoSuchViewException;
 import org.apache.spark.sql.connector.catalog.Identifier;
 import org.apache.spark.sql.connector.catalog.ProcedureCatalog;
+import org.apache.spark.sql.connector.catalog.Relation;
+import org.apache.spark.sql.connector.catalog.RelationCatalog;
 import org.apache.spark.sql.connector.catalog.StagingTableCatalog;
 import org.apache.spark.sql.connector.catalog.SupportsNamespaces;
-import org.apache.spark.sql.connector.catalog.ViewCatalog;
 import org.apache.spark.sql.connector.catalog.procedures.UnboundProcedure;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
 
@@ -36,7 +39,24 @@ abstract class BaseCatalog
         SupportsNamespaces,
         HasIcebergCatalog,
         SupportsFunctions,
-        ViewCatalog {
+        RelationCatalog {
+
+  // Spark 4.2 requires a catalog that exposes both tables and views to implement RelationCatalog
+  // (which extends TableCatalog + ViewCatalog) rather than the two interfaces directly; Catalogs
+  // .validateRelationCatalog rejects the latter. loadRelation is the single new abstract entry
+  // point: resolve the identifier to a table first, falling back to a view.
+  @Override
+  public Relation loadRelation(Identifier ident) throws NoSuchTableException {
+    try {
+      return loadTable(ident);
+    } catch (NoSuchTableException tableNotFound) {
+      try {
+        return loadView(ident);
+      } catch (NoSuchViewException viewNotFound) {
+        throw tableNotFound;
+      }
+    }
+  }
   private static final String USE_NULLABLE_QUERY_SCHEMA_CTAS_RTAS = "use-nullable-query-schema";
   private static final boolean USE_NULLABLE_QUERY_SCHEMA_CTAS_RTAS_DEFAULT = true;
 

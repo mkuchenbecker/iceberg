@@ -95,6 +95,16 @@ public class RewriteFileGroup {
     return fileScanTasks.size();
   }
 
+  /** The largest data sequence number among this group's input files; 0 when none carries one. */
+  public long maxDataSequenceNumber() {
+    return fileScanTasks.stream()
+        .map(t -> t.file().dataSequenceNumber())
+        .filter(seq -> seq != null)
+        .mapToLong(Long::longValue)
+        .max()
+        .orElse(0L);
+  }
+
   public long minFileSequenceNumber() {
     return fileScanTasks.stream().mapToLong(t -> t.file().fileSequenceNumber()).min().orElse(0L);
   }

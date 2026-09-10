@@ -23,7 +23,12 @@ import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
 import org.apache.iceberg.FileScanTask;
+import org.apache.iceberg.SortField;
+import org.apache.iceberg.SortOrderParser;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.actions.RewriteDataFiles;
+import org.apache.iceberg.expressions.Expressions;
+import org.apache.iceberg.expressions.Term;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
 import org.apache.iceberg.spark.Spark3Util;
@@ -32,6 +37,7 @@ import org.apache.iceberg.spark.SparkReadOptions;
 import org.apache.iceberg.spark.SparkWriteOptions;
 import org.apache.iceberg.util.PropertyUtil;
 import org.apache.iceberg.util.SortOrderUtil;
+import org.apache.spark.sql.DataFrameWriter;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
@@ -79,12 +85,22 @@ abstract class SparkShufflingDataRewriter extends SparkSizeBasedDataRewriter {
 
   private double compressionFactor;
   private int numShufflePartitionsPerFile;
+  private Integer outputSortOrderId;
 
   protected SparkShufflingDataRewriter(SparkSession spark, Table table) {
     super(spark, table);
   }
 
   protected abstract org.apache.iceberg.SortOrder sortOrder();
+
+  /**
+   * The sort order, bound to the table schema, that describes the layout this rewriter produces.
+   * Recorded on the output files as their sort order id when {@link
+   * RewriteDataFiles#OUTPUT_SORT_ORDER_ID} is set. Defaults to {@link #sortOrder()}.
+   */
+  protected org.apache.iceberg.SortOrder layoutSortOrder() {
+    return sortOrder();
+  }
 
   protected abstract Dataset<Row> sortedDF(
       Dataset<Row> df, Function<Dataset<Row>, Dataset<Row>> sortFunc);
@@ -95,6 +111,7 @@ abstract class SparkShufflingDataRewriter extends SparkSizeBasedDataRewriter {
         .addAll(super.validOptions())
         .add(COMPRESSION_FACTOR)
         .add(SHUFFLE_PARTITIONS_PER_FILE)
+        .add(RewriteDataFiles.OUTPUT_SORT_ORDER_ID)
         .build();
   }
 
@@ -103,6 +120,41 @@ abstract class SparkShufflingDataRewriter extends SparkSizeBasedDataRewriter {
     super.init(options);
     this.compressionFactor = compressionFactor(options);
     this.numShufflePartitionsPerFile = numShufflePartitionsPerFile(options);
+    this.outputSortOrderId =
+        PropertyUtil.propertyAsNullableInt(options, RewriteDataFiles.OUTPUT_SORT_ORDER_ID);
+    Preconditions.checkArgument(
+        outputSortOrderId == null || outputSortOrderId != 0,
+        "Cannot set %s to 0, it is reserved for unsorted files",
+        RewriteDataFiles.OUTPUT_SORT_ORDER_ID);
+  }
+
+  /**
+   * The layout sort order rebuilt under the configured output sort order id, or null when no id was
+   * configured.
+   */
+  protected org.apache.iceberg.SortOrder outputSortOrder() {
+    if (outputSortOrderId == null) {
+      return null;
+    }
+
+    org.apache.iceberg.SortOrder layout = layoutSortOrder();
+    org.apache.iceberg.SortOrder.Builder builder =
+        org.apache.iceberg.SortOrder.builderFor(table().schema()).withOrderId(outputSortOrderId);
+    for (SortField field : layout.fields()) {
+      String column = table().schema().findColumnName(field.sourceId());
+      Preconditions.checkArgument(
+          column != null,
+          "Cannot record sort order id %s: field %s of the layout is not in the table schema",
+          outputSortOrderId,
+          field.sourceId());
+      Term term =
+          field.transform().isIdentity()
+              ? Expressions.ref(column)
+              : Expressions.transform(column, field.transform());
+      builder.sortBy(term, field.direction(), field.nullOrder());
+    }
+
+    return builder.build();
   }
 
   @Override
@@ -116,8 +168,15 @@ abstract class SparkShufflingDataRewriter extends SparkSizeBasedDataRewriter {
 
     Dataset<Row> sortedDF = sortedDF(scanDF, sortFunction(group));
 
-    sortedDF
-        .write()
+    DataFrameWriter<Row> writer = withOutputFileMetadata(sortedDF.write());
+    org.apache.iceberg.SortOrder outputSortOrder = outputSortOrder();
+    if (outputSortOrder != null) {
+      writer =
+          writer.option(
+              SparkWriteOptions.OUTPUT_SORT_ORDER, SortOrderParser.toJson(outputSortOrder));
+    }
+
+    writer
         .format("iceberg")
         .option(SparkWriteOptions.REWRITTEN_FILE_SCAN_TASK_SET_ID, groupId)
         .option(SparkWriteOptions.TARGET_FILE_SIZE_BYTES, writeMaxFileSize())

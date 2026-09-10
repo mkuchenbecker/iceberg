@@ -108,6 +108,19 @@ class SparkZOrderDataRewriter extends SparkShufflingDataRewriter {
     return Z_SORT_ORDER;
   }
 
+  /**
+   * The z-order key selection as a table sort order. A z-order is not a lexical sort, so this
+   * describes which columns were interleaved, in order; it does not claim the files are sorted.
+   */
+  @Override
+  protected SortOrder layoutSortOrder() {
+    SortOrder.Builder builder = SortOrder.builderFor(table().schema());
+    for (String column : zOrderColNames) {
+      builder.asc(column, NullOrder.NULLS_LAST);
+    }
+    return builder.build();
+  }
+
   @Override
   protected Dataset<Row> sortedDF(Dataset<Row> df, Function<Dataset<Row>, Dataset<Row>> sortFunc) {
     Dataset<Row> zValueDF = df.withColumn(Z_COLUMN, zValue(df));

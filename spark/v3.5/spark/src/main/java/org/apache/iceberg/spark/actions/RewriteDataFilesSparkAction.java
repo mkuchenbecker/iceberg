@@ -82,7 +82,15 @@ public class RewriteDataFilesSparkAction
           PARTIAL_PROGRESS_MAX_COMMITS,
           TARGET_FILE_SIZE_BYTES,
           USE_STARTING_SEQUENCE_NUMBER,
+          USE_MAX_INPUT_SEQUENCE_NUMBER,
+          MIN_DATA_SEQUENCE_NUMBER,
+          MAX_DATA_SEQUENCE_NUMBER,
+          INCLUDE_SORT_ORDER_IDS,
+          EXCLUDE_SORT_ORDER_IDS,
           REWRITE_JOB_ORDER);
+
+  /** Token naming files that carry no sort order id in the include/exclude sort order id lists. */
+  private static final String NULL_SORT_ORDER_ID = "null";
 
   private static final RewriteDataFilesSparkAction.Result EMPTY_RESULT =
       ImmutableRewriteDataFiles.Result.builder().rewriteResults(ImmutableList.of()).build();
@@ -94,6 +102,11 @@ public class RewriteDataFilesSparkAction
   private int maxCommits;
   private boolean partialProgressEnabled;
   private boolean useStartingSequenceNumber;
+  private boolean useMaxInputSequenceNumber;
+  private Long minDataSequenceNumber;
+  private Long maxDataSequenceNumber;
+  private Set<String> includeSortOrderIds;
+  private Set<String> excludeSortOrderIds;
   private long maxTotalFilesSizeBytes;
   private RewriteJobOrder rewriteJobOrder;
   private FileRewriter<FileScanTask, DataFile> rewriter = null;
@@ -191,6 +204,8 @@ public class RewriteDataFilesSparkAction
             .planFiles();
 
     List<FileScanTask> tasks = Lists.newArrayList(fileScanTasks);
+    tasks.removeIf(task -> !isSelected(task.file()));
+
     // Sort tasks by file sequence number in order to rewrite older (newer) files first
     if (RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC.equals(rewriteJobOrder)
         || RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_DESC.equals(rewriteJobOrder)) {
@@ -221,6 +236,63 @@ public class RewriteDataFilesSparkAction
         LOG.error("Cannot properly close file iterable while planning for rewrite", io);
       }
     }
+  }
+
+  /**
+   * Whether a file passes the metadata-level selection: its data sequence number is inside the
+   * configured bounds and its sort order id is allowed by the include/exclude lists.
+   */
+  private boolean isSelected(DataFile file) {
+    long dataSequenceNumber = file.dataSequenceNumber() != null ? file.dataSequenceNumber() : 0L;
+    if (minDataSequenceNumber != null && dataSequenceNumber <= minDataSequenceNumber) {
+      return false;
+    }
+
+    if (maxDataSequenceNumber != null && dataSequenceNumber > maxDataSequenceNumber) {
+      return false;
+    }
+
+    // Files written without a sort order carry either no id or the unsorted order's id 0; both
+    // mean "no layout" and both match the null token.
+    String sortOrderId =
+        file.sortOrderId() != null && file.sortOrderId() != 0
+            ? file.sortOrderId().toString()
+            : NULL_SORT_ORDER_ID;
+    if (includeSortOrderIds != null && !includeSortOrderIds.contains(sortOrderId)) {
+      return false;
+    }
+
+    return excludeSortOrderIds == null || !excludeSortOrderIds.contains(sortOrderId);
+  }
+
+  private static Set<String> sortOrderIds(Map<String, String> options, String option) {
+    String value = options.get(option);
+    if (value == null) {
+      return null;
+    }
+
+    Set<String> ids = Sets.newHashSet();
+    for (String id : value.split(",")) {
+      String trimmed = id.trim();
+      if (trimmed.isEmpty()) {
+        continue;
+      }
+
+      if (NULL_SORT_ORDER_ID.equalsIgnoreCase(trimmed)) {
+        ids.add(NULL_SORT_ORDER_ID);
+      } else {
+        try {
+          ids.add(Integer.toString(Integer.parseInt(trimmed)));
+        } catch (NumberFormatException e) {
+          throw new IllegalArgumentException(
+              String.format(
+                  "Cannot parse %s '%s': expected comma-separated integers or null", option, value),
+              e);
+        }
+      }
+    }
+
+    return ids;
   }
 
   private StructLikeMap<List<FileScanTask>> groupByPartition(
@@ -279,7 +351,11 @@ public class RewriteDataFilesSparkAction
   @VisibleForTesting
   RewriteDataFilesCommitManager commitManager(long startingSnapshotId) {
     return new RewriteDataFilesCommitManager(
-        table, startingSnapshotId, useStartingSequenceNumber, commitSummary());
+        table,
+        startingSnapshotId,
+        useStartingSequenceNumber,
+        useMaxInputSequenceNumber,
+        commitSummary());
   }
 
   private Result doExecute(
@@ -429,6 +505,7 @@ public class RewriteDataFilesSparkAction
 
     Set<String> invalidKeys = Sets.newHashSet(options().keySet());
     invalidKeys.removeAll(validOptions);
+    invalidKeys.removeIf(key -> key.startsWith(OUTPUT_FILE_METADATA_PREFIX));
 
     Preconditions.checkArgument(
         invalidKeys.isEmpty(),
@@ -459,6 +536,37 @@ public class RewriteDataFilesSparkAction
     useStartingSequenceNumber =
         PropertyUtil.propertyAsBoolean(
             options(), USE_STARTING_SEQUENCE_NUMBER, USE_STARTING_SEQUENCE_NUMBER_DEFAULT);
+
+    useMaxInputSequenceNumber =
+        PropertyUtil.propertyAsBoolean(
+            options(), USE_MAX_INPUT_SEQUENCE_NUMBER, USE_MAX_INPUT_SEQUENCE_NUMBER_DEFAULT);
+    if (useMaxInputSequenceNumber) {
+      // The starting-snapshot mode is on by default; an explicit request for the max-input mode
+      // replaces it, and only an explicit request for both is a contradiction.
+      Preconditions.checkArgument(
+          !options().containsKey(USE_STARTING_SEQUENCE_NUMBER) || !useStartingSequenceNumber,
+          "Cannot set both %s and %s to true",
+          USE_STARTING_SEQUENCE_NUMBER,
+          USE_MAX_INPUT_SEQUENCE_NUMBER);
+      useStartingSequenceNumber = false;
+    }
+
+    minDataSequenceNumber =
+        PropertyUtil.propertyAsNullableLong(options(), MIN_DATA_SEQUENCE_NUMBER);
+    maxDataSequenceNumber =
+        PropertyUtil.propertyAsNullableLong(options(), MAX_DATA_SEQUENCE_NUMBER);
+    includeSortOrderIds = sortOrderIds(options(), INCLUDE_SORT_ORDER_IDS);
+    excludeSortOrderIds = sortOrderIds(options(), EXCLUDE_SORT_ORDER_IDS);
+
+    Preconditions.checkArgument(
+        minDataSequenceNumber == null
+            || maxDataSequenceNumber == null
+            || minDataSequenceNumber < maxDataSequenceNumber,
+        "Cannot set %s (%s) at or above %s (%s): no file can match",
+        MIN_DATA_SEQUENCE_NUMBER,
+        minDataSequenceNumber,
+        MAX_DATA_SEQUENCE_NUMBER,
+        maxDataSequenceNumber);
 
     rewriteJobOrder =
         RewriteJobOrder.fromName(

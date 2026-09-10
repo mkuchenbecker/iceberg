@@ -38,6 +38,7 @@ public class RewriteDataFilesCommitManager {
   private final Table table;
   private final long startingSnapshotId;
   private final boolean useStartingSequenceNumber;
+  private final boolean useMaxInputSequenceNumber;
   private final Map<String, String> snapshotProperties;
 
   // constructor used for testing
@@ -59,9 +60,22 @@ public class RewriteDataFilesCommitManager {
       long startingSnapshotId,
       boolean useStartingSequenceNumber,
       Map<String, String> snapshotProperties) {
+    this(table, startingSnapshotId, useStartingSequenceNumber, false, snapshotProperties);
+  }
+
+  public RewriteDataFilesCommitManager(
+      Table table,
+      long startingSnapshotId,
+      boolean useStartingSequenceNumber,
+      boolean useMaxInputSequenceNumber,
+      Map<String, String> snapshotProperties) {
+    Preconditions.checkArgument(
+        !(useStartingSequenceNumber && useMaxInputSequenceNumber),
+        "Cannot use both the starting snapshot's and the max input sequence number");
     this.table = table;
     this.startingSnapshotId = startingSnapshotId;
     this.useStartingSequenceNumber = useStartingSequenceNumber;
+    this.useMaxInputSequenceNumber = useMaxInputSequenceNumber;
     this.snapshotProperties = snapshotProperties;
   }
 
@@ -83,6 +97,8 @@ public class RewriteDataFilesCommitManager {
     if (useStartingSequenceNumber) {
       long sequenceNumber = table.snapshot(startingSnapshotId).sequenceNumber();
       rewrite.rewriteFiles(rewrittenDataFiles, addedDataFiles, sequenceNumber);
+    } else if (useMaxInputSequenceNumber) {
+      rewrite.rewriteFiles(rewrittenDataFiles, addedDataFiles, maxDataSequenceNumber(fileGroups));
     } else {
       rewrite.rewriteFiles(rewrittenDataFiles, addedDataFiles);
     }
@@ -90,6 +106,14 @@ public class RewriteDataFilesCommitManager {
     snapshotProperties.forEach(rewrite::set);
 
     rewrite.commit();
+  }
+
+  /**
+   * The largest data sequence number among the input files of the given groups. Files without a
+   * sequence number (format version 1) count as 0.
+   */
+  public static long maxDataSequenceNumber(Set<RewriteFileGroup> fileGroups) {
+    return fileGroups.stream().mapToLong(RewriteFileGroup::maxDataSequenceNumber).max().orElse(0L);
   }
 
   /**

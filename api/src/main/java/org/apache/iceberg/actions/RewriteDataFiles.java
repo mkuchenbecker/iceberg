@@ -125,6 +125,56 @@ public interface RewriteDataFiles
   String REWRITE_JOB_ORDER_DEFAULT = RewriteJobOrder.NONE.orderName();
 
   /**
+   * Only rewrite files whose data sequence number is strictly greater than this value. Files at or
+   * below it are left alone. Together with {@link #USE_MAX_INPUT_SEQUENCE_NUMBER} this lets an
+   * incremental maintenance loop resume from a persisted watermark without ever re-selecting its
+   * own output. Sequence numbers are 0 on format-version 1 tables, so this is only meaningful on
+   * version 2 tables.
+   */
+  String MIN_DATA_SEQUENCE_NUMBER = "min-data-sequence-number";
+
+  /** Only rewrite files whose data sequence number is less than or equal to this value. */
+  String MAX_DATA_SEQUENCE_NUMBER = "max-data-sequence-number";
+
+  /**
+   * Only rewrite files whose sort order id is one of the comma-separated ids in this list. The
+   * literal {@code null} selects files that carry no sort order id or the unsorted order's id 0.
+   */
+  String INCLUDE_SORT_ORDER_IDS = "include-sort-order-ids";
+
+  /**
+   * Skip files whose sort order id is one of the comma-separated ids in this list. The literal
+   * {@code null} skips files that carry no sort order id or the unsorted order's id 0.
+   */
+  String EXCLUDE_SORT_ORDER_IDS = "exclude-sort-order-ids";
+
+  /**
+   * If the rewrite should commit its new data files with the data sequence number of the newest
+   * input file in the same commit instead of a fresh sequence number. The output of a rewrite is
+   * then never newer than its input, so a watermark on data sequence numbers advances past it. Any
+   * equality delete newer than the inputs still applies to the output. Setting this replaces the
+   * default {@link #USE_STARTING_SEQUENCE_NUMBER} behavior; setting both explicitly is an error.
+   */
+  String USE_MAX_INPUT_SEQUENCE_NUMBER = "use-max-input-sequence-number";
+
+  boolean USE_MAX_INPUT_SEQUENCE_NUMBER_DEFAULT = false;
+
+  /**
+   * Sort order id to record on every data file written by a sort or z-order rewrite. The id does
+   * not have to be one of the table's registered sort orders; it identifies the layout the rewrite
+   * produced so a later rewrite can select files by it. Not supported by bin-pack, which produces
+   * no layout.
+   */
+  String OUTPUT_SORT_ORDER_ID = "output-sort-order-id";
+
+  /**
+   * Prefix for key-value metadata to write into the footer of every data file this rewrite writes,
+   * e.g. {@code output-file-metadata.layout=abc} writes {@code layout=abc}. Supported by the ORC,
+   * Parquet and Avro writers.
+   */
+  String OUTPUT_FILE_METADATA_PREFIX = "output-file-metadata.";
+
+  /**
    * Choose BINPACK as a strategy for this rewrite operation
    *
    * @return this for method chaining

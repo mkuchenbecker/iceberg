@@ -52,8 +52,7 @@ class SparkBinPackDataRewriter extends SparkSizeBasedDataRewriter {
             .load(groupId);
 
     // write the packed data into new files where each split becomes a new file
-    scanDF
-        .write()
+    withOutputFileMetadata(scanDF.write())
         .format("iceberg")
         .option(SparkWriteOptions.REWRITTEN_FILE_SCAN_TASK_SET_ID, groupId)
         .option(SparkWriteOptions.TARGET_FILE_SIZE_BYTES, writeMaxFileSize())

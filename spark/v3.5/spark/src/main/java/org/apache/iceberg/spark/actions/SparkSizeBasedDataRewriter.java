@@ -19,15 +19,22 @@
 package org.apache.iceberg.spark.actions;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.actions.RewriteDataFiles;
 import org.apache.iceberg.actions.SizeBasedDataRewriter;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.spark.FileRewriteCoordinator;
 import org.apache.iceberg.spark.ScanTaskSetManager;
 import org.apache.iceberg.spark.SparkTableCache;
+import org.apache.iceberg.spark.SparkWriteOptions;
+import org.apache.iceberg.util.PropertyUtil;
+import org.apache.spark.sql.DataFrameWriter;
+import org.apache.spark.sql.Row;
 import org.apache.spark.sql.SparkSession;
 
 abstract class SparkSizeBasedDataRewriter extends SizeBasedDataRewriter {
@@ -36,10 +43,33 @@ abstract class SparkSizeBasedDataRewriter extends SizeBasedDataRewriter {
   private final SparkTableCache tableCache = SparkTableCache.get();
   private final ScanTaskSetManager taskSetManager = ScanTaskSetManager.get();
   private final FileRewriteCoordinator coordinator = FileRewriteCoordinator.get();
+  private Map<String, String> outputFileMetadata = ImmutableMap.of();
 
   SparkSizeBasedDataRewriter(SparkSession spark, Table table) {
     super(table);
     this.spark = spark;
+  }
+
+  @Override
+  public void init(Map<String, String> options) {
+    super.init(options);
+    this.outputFileMetadata =
+        PropertyUtil.propertiesWithPrefix(options, RewriteDataFiles.OUTPUT_FILE_METADATA_PREFIX);
+  }
+
+  /** Key-value metadata written into the footer of every data file this rewriter produces. */
+  protected Map<String, String> outputFileMetadata() {
+    return outputFileMetadata;
+  }
+
+  /** Adds the configured footer metadata to a rewrite's write. */
+  protected DataFrameWriter<Row> withOutputFileMetadata(DataFrameWriter<Row> writer) {
+    DataFrameWriter<Row> result = writer;
+    for (Map.Entry<String, String> entry : outputFileMetadata.entrySet()) {
+      result =
+          result.option(SparkWriteOptions.FILE_METADATA_PREFIX + entry.getKey(), entry.getValue());
+    }
+    return result;
   }
 
   protected abstract void doRewrite(String groupId, List<FileScanTask> group);

@@ -55,6 +55,13 @@ public class SparkWriteOptions {
   // File scan task set ID that indicates which files must be replaced
   public static final String REWRITTEN_FILE_SCAN_TASK_SET_ID = "rewritten-file-scan-task-set-id";
 
+  // JSON of the sort order to record on every written data file (its id becomes the file's sort
+  // order id); the order need not be one of the table's registered sort orders
+  public static final String OUTPUT_SORT_ORDER = "output-sort-order";
+
+  // prefix for key-value metadata to write into the footer of every written data file
+  public static final String FILE_METADATA_PREFIX = "file-metadata.";
+
   public static final String OUTPUT_SPEC_ID = "output-spec-id";
 
   public static final String OVERWRITE_MODE = "overwrite-mode";

@@ -41,6 +41,8 @@ import org.apache.iceberg.DistributionMode;
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.IsolationLevel;
 import org.apache.iceberg.SnapshotSummary;
+import org.apache.iceberg.SortOrder;
+import org.apache.iceberg.SortOrderParser;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.deletes.DeleteGranularity;
@@ -48,6 +50,7 @@ import org.apache.iceberg.exceptions.ValidationException;
 import org.apache.iceberg.relocated.com.google.common.annotations.VisibleForTesting;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
+import org.apache.iceberg.util.PropertyUtil;
 import org.apache.spark.sql.RuntimeConfig;
 import org.apache.spark.sql.SparkSession;
 import org.apache.spark.sql.connector.write.RowLevelOperation.Command;
@@ -442,6 +445,21 @@ public class SparkWriteConf {
         .defaultValue(SparkWriteOptions.USE_TABLE_DISTRIBUTION_AND_ORDERING_DEFAULT)
         .negate()
         .parse();
+  }
+
+  /**
+   * The sort order to record on written data files, bound to the table schema, or null when the
+   * write does not request one.
+   */
+  public SortOrder outputSortOrder() {
+    String json =
+        confParser.stringConf().option(SparkWriteOptions.OUTPUT_SORT_ORDER).parseOptional();
+    return json != null ? SortOrderParser.fromJson(table.schema(), json) : null;
+  }
+
+  /** Key-value metadata to write into the footer of every written data file. */
+  public Map<String, String> fileMetadata() {
+    return PropertyUtil.propertiesWithPrefix(writeOptions, SparkWriteOptions.FILE_METADATA_PREFIX);
   }
 
   public Long validateFromSnapshotId() {

@@ -37,6 +37,8 @@ import static org.mockito.Mockito.spy;
 import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.Comparator;
@@ -105,6 +107,10 @@ import org.apache.iceberg.types.Types;
 import org.apache.iceberg.types.Types.NestedField;
 import org.apache.iceberg.util.Pair;
 import org.apache.iceberg.util.StructLikeMap;
+import org.apache.orc.OrcFile;
+import org.apache.orc.Reader;
+import org.apache.parquet.hadoop.ParquetFileReader;
+import org.apache.parquet.hadoop.util.HadoopInputFile;
 import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.internal.SQLConf;
@@ -1843,6 +1849,327 @@ public class TestRewriteDataFilesAction extends TestBase {
         .save(tableLocation);
 
     return table;
+  }
+
+  @Test
+  public void testDataSequenceNumberBounds() {
+    Table table = createV2Table();
+    writeRecords(2, SCALE); // data sequence 1
+    writeRecords(3, SCALE); // data sequence 2
+    table.refresh();
+    assertThat(table.currentSnapshot().sequenceNumber()).isEqualTo(2);
+    List<Object[]> expectedRecords = currentData();
+
+    // an exclusive lower bound of 1 selects only the second write
+    Result result =
+        basicRewrite(table).option(RewriteDataFiles.MIN_DATA_SEQUENCE_NUMBER, "1").execute();
+    assertThat(result.rewrittenDataFilesCount())
+        .as("Should rewrite only the files above the lower bound")
+        .isEqualTo(3);
+    assertThat(result.addedDataFilesCount()).isEqualTo(1);
+
+    // the output landed at sequence 3, so an inclusive upper bound of 1 selects the first write
+    result = basicRewrite(table).option(RewriteDataFiles.MAX_DATA_SEQUENCE_NUMBER, "1").execute();
+    assertThat(result.rewrittenDataFilesCount())
+        .as("Should rewrite only the files at or below the upper bound")
+        .isEqualTo(2);
+
+    // a window that no file falls in is a no-op
+    result =
+        basicRewrite(table)
+            .option(RewriteDataFiles.MIN_DATA_SEQUENCE_NUMBER, "100")
+            .option(RewriteDataFiles.MAX_DATA_SEQUENCE_NUMBER, "200")
+            .execute();
+    assertThat(result.rewrittenDataFilesCount()).isEqualTo(0);
+
+    assertEquals("Rows must match", expectedRecords, currentData());
+  }
+
+  @Test
+  public void testDataSequenceNumberBoundsValidation() {
+    Table table = createV2Table();
+    writeRecords(2, SCALE);
+
+    assertThatThrownBy(
+            () ->
+                basicRewrite(table)
+                    .option(RewriteDataFiles.MIN_DATA_SEQUENCE_NUMBER, "5")
+                    .option(RewriteDataFiles.MAX_DATA_SEQUENCE_NUMBER, "5")
+                    .execute())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("no file can match");
+
+    assertThatThrownBy(
+            () ->
+                basicRewrite(table)
+                    .option(RewriteDataFiles.USE_STARTING_SEQUENCE_NUMBER, "true")
+                    .option(RewriteDataFiles.USE_MAX_INPUT_SEQUENCE_NUMBER, "true")
+                    .execute())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Cannot set both");
+
+    assertThatThrownBy(
+            () ->
+                basicRewrite(table)
+                    .option(RewriteDataFiles.INCLUDE_SORT_ORDER_IDS, "7,abc")
+                    .execute())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("expected comma-separated integers or null");
+  }
+
+  @Test
+  public void testUseMaxInputSequenceNumber() {
+    Table table = createV2Table();
+    writeRecords(2, SCALE); // data sequence 1
+    writeRecords(3, SCALE); // data sequence 2
+    List<Object[]> expectedRecords = currentData();
+
+    // an incremental pass from watermark 1 rewrites the second write and stamps its output with the
+    // newest input sequence, 2, even though the commit itself is sequence 3
+    Result result =
+        basicRewrite(table)
+            .option(RewriteDataFiles.MIN_DATA_SEQUENCE_NUMBER, "1")
+            .option(RewriteDataFiles.USE_MAX_INPUT_SEQUENCE_NUMBER, "true")
+            .execute();
+    assertThat(result.rewrittenDataFilesCount()).isEqualTo(3);
+    assertThat(result.addedDataFilesCount()).isEqualTo(1);
+
+    table.refresh();
+    assertThat(table.currentSnapshot().sequenceNumber()).isEqualTo(3);
+    long rewriteSnapshotId = table.currentSnapshot().snapshotId();
+    List<Row> added =
+        currentEntries(table).stream()
+            .filter(row -> row.getInt(0) == 1 && row.getLong(1) == rewriteSnapshotId)
+            .collect(Collectors.toList());
+    assertThat(added).hasSize(1);
+    assertThat(added.get(0).getLong(2))
+        .as("Output should carry the newest input's data sequence number")
+        .isEqualTo(2);
+
+    // advancing the watermark to the consumed sequence leaves nothing to do: the output is not
+    // re-selected by the next incremental pass
+    result =
+        basicRewrite(table)
+            .option(RewriteDataFiles.MIN_DATA_SEQUENCE_NUMBER, "2")
+            .option(RewriteDataFiles.USE_MAX_INPUT_SEQUENCE_NUMBER, "true")
+            .execute();
+    assertThat(result.rewrittenDataFilesCount()).isEqualTo(0);
+
+    assertEquals("Rows must match", expectedRecords, currentData());
+
+    // new data lands above the watermark and is picked up (rewrite-all, since a single file
+    // inside the size thresholds is otherwise nothing for bin-pack to do)
+    writeRecords(1, SCALE); // data sequence 4
+    List<Object[]> expectedAfterAppend = currentData();
+    result =
+        basicRewrite(table)
+            .option(RewriteDataFiles.MIN_DATA_SEQUENCE_NUMBER, "2")
+            .option(RewriteDataFiles.USE_MAX_INPUT_SEQUENCE_NUMBER, "true")
+            .option(SizeBasedFileRewriter.REWRITE_ALL, "true")
+            .execute();
+    assertThat(result.rewrittenDataFilesCount()).isEqualTo(1);
+    assertEquals("Rows must match", expectedAfterAppend, currentData());
+  }
+
+  @Test
+  public void testOutputSortOrderIdStampsAndSelectsFiles() {
+    Table table = createV2Table();
+    writeRecords(4, SCALE);
+    List<Object[]> expectedRecords = currentData();
+    SortOrder byC2 = SortOrder.builderFor(table.schema()).asc("c2").build();
+
+    // the first layout: every output file records sort order id 7
+    Result result =
+        basicRewrite(table).sort(byC2).option(RewriteDataFiles.OUTPUT_SORT_ORDER_ID, "7").execute();
+    assertThat(result.rewrittenDataFilesCount()).isEqualTo(4);
+    assertThat(currentSortOrderIds(table)).containsOnly(7);
+
+    // new, unstamped data arrives: plain writes carry the unsorted order's id 0
+    writeRecords(2, SCALE);
+    expectedRecords = currentData();
+    assertThat(currentSortOrderIds(table)).containsOnlyOnce(7).contains(0);
+
+    // an incremental pass selects only unstamped files and stamps them with the same layout
+    result =
+        basicRewrite(table)
+            .sort(byC2)
+            .option(RewriteDataFiles.INCLUDE_SORT_ORDER_IDS, "null")
+            .option(RewriteDataFiles.OUTPUT_SORT_ORDER_ID, "7")
+            .execute();
+    assertThat(result.rewrittenDataFilesCount()).isEqualTo(2);
+    assertThat(currentSortOrderIds(table)).containsOnly(7);
+
+    // nothing is left once every file carries the current layout
+    result =
+        basicRewrite(table)
+            .sort(byC2)
+            .option(RewriteDataFiles.EXCLUDE_SORT_ORDER_IDS, "7")
+            .option(RewriteDataFiles.OUTPUT_SORT_ORDER_ID, "7")
+            .execute();
+    assertThat(result.rewrittenDataFilesCount()).isEqualTo(0);
+
+    // a new layout id: a full pass rewrites everything not carrying it
+    SortOrder byC3 = SortOrder.builderFor(table.schema()).asc("c3").build();
+    result =
+        basicRewrite(table)
+            .sort(byC3)
+            .option(RewriteDataFiles.EXCLUDE_SORT_ORDER_IDS, "8")
+            .option(RewriteDataFiles.OUTPUT_SORT_ORDER_ID, "8")
+            .execute();
+    assertThat(result.rewrittenDataFilesCount()).isEqualTo(2);
+    assertThat(currentSortOrderIds(table)).containsOnly(8);
+
+    assertEquals("Rows must match", expectedRecords, currentData());
+  }
+
+  @Test
+  public void testOutputSortOrderIdWithZOrder() {
+    Table table = createV2Table();
+    writeRecords(3, SCALE);
+    List<Object[]> expectedRecords = currentData();
+
+    Result result =
+        basicRewrite(table)
+            .zOrder("c1", "c2")
+            .option(RewriteDataFiles.OUTPUT_SORT_ORDER_ID, "9")
+            .execute();
+    assertThat(result.rewrittenDataFilesCount()).isEqualTo(3);
+    assertThat(currentSortOrderIds(table)).containsOnly(9);
+    assertEquals("Rows must match", expectedRecords, currentData());
+  }
+
+  @Test
+  public void testOutputSortOrderIdRejectedByBinPack() {
+    Table table = createV2Table();
+    writeRecords(2, SCALE);
+
+    assertThatThrownBy(
+            () -> basicRewrite(table).option(RewriteDataFiles.OUTPUT_SORT_ORDER_ID, "7").execute())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("Cannot use options");
+
+    assertThatThrownBy(
+            () ->
+                basicRewrite(table)
+                    .sort(SortOrder.builderFor(table.schema()).asc("c2").build())
+                    .option(RewriteDataFiles.OUTPUT_SORT_ORDER_ID, "0")
+                    .execute())
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessageContaining("reserved for unsorted files");
+  }
+
+  @Test
+  public void testOutputFileMetadataParquet() throws IOException {
+    Table table = createV2Table();
+    writeRecords(3, SCALE);
+    List<Object[]> expectedRecords = currentData();
+
+    Result result =
+        basicRewrite(table)
+            .option(RewriteDataFiles.OUTPUT_FILE_METADATA_PREFIX + "layout", "abc")
+            .option(RewriteDataFiles.OUTPUT_FILE_METADATA_PREFIX + "run", "1")
+            .execute();
+    assertThat(result.rewrittenDataFilesCount()).isEqualTo(3);
+
+    Configuration conf = new Configuration();
+    for (DataFile file : currentDataFiles(table)) {
+      assertThat(file.format()).isEqualTo(FileFormat.PARQUET);
+      Map<String, String> footer;
+      try (ParquetFileReader reader =
+          ParquetFileReader.open(
+              HadoopInputFile.fromPath(
+                  new org.apache.hadoop.fs.Path(file.path().toString()), conf))) {
+        footer = reader.getFooter().getFileMetaData().getKeyValueMetaData();
+      }
+      assertThat(footer).containsEntry("layout", "abc").containsEntry("run", "1");
+    }
+
+    // a plain rewrite of the stamped file does not carry the stamp forward
+    writeRecords(2, SCALE);
+    expectedRecords = currentData();
+    basicRewrite(table).option(SizeBasedFileRewriter.REWRITE_ALL, "true").execute();
+    assertThat(currentDataFiles(table)).hasSize(1);
+    for (DataFile file : currentDataFiles(table)) {
+      try (ParquetFileReader reader =
+          ParquetFileReader.open(
+              HadoopInputFile.fromPath(
+                  new org.apache.hadoop.fs.Path(file.path().toString()), conf))) {
+        assertThat(reader.getFooter().getFileMetaData().getKeyValueMetaData())
+            .doesNotContainKey("layout");
+      }
+    }
+
+    assertEquals("Rows must match", expectedRecords, currentData());
+  }
+
+  @Test
+  public void testOutputFileMetadataOrc() throws IOException {
+    Table table =
+        TABLES.create(
+            SCHEMA,
+            PartitionSpec.unpartitioned(),
+            ImmutableMap.of(
+                TableProperties.FORMAT_VERSION, "2",
+                TableProperties.DEFAULT_FILE_FORMAT, "orc"),
+            tableLocation);
+    writeRecords(3, SCALE);
+    List<Object[]> expectedRecords = currentData();
+
+    Result result =
+        basicRewrite(table)
+            .sort(SortOrder.builderFor(table.schema()).asc("c2").build())
+            .option(RewriteDataFiles.OUTPUT_SORT_ORDER_ID, "7")
+            .option(RewriteDataFiles.OUTPUT_FILE_METADATA_PREFIX + "layout", "abc")
+            .execute();
+    assertThat(result.rewrittenDataFilesCount()).isEqualTo(3);
+    assertThat(currentSortOrderIds(table)).containsOnly(7);
+
+    Configuration conf = new Configuration();
+    for (DataFile file : currentDataFiles(table)) {
+      assertThat(file.format()).isEqualTo(FileFormat.ORC);
+      try (Reader reader =
+          OrcFile.createReader(
+              new org.apache.hadoop.fs.Path(file.path().toString()), OrcFile.readerOptions(conf))) {
+        assertThat(reader.hasMetadataValue("layout")).isTrue();
+        ByteBuffer value = reader.getMetadataValue("layout");
+        assertThat(StandardCharsets.UTF_8.decode(value).toString()).isEqualTo("abc");
+      }
+    }
+
+    assertEquals("Rows must match", expectedRecords, currentData());
+  }
+
+  private Table createV2Table() {
+    Table table =
+        TABLES.create(
+            SCHEMA,
+            PartitionSpec.unpartitioned(),
+            ImmutableMap.of(TableProperties.FORMAT_VERSION, "2"),
+            tableLocation);
+    assertThat(table.currentSnapshot()).as("Table must be empty").isNull();
+    return table;
+  }
+
+  /** Live manifest entries of the current snapshot: status, snapshot_id, sequence_number, ... */
+  private List<Row> currentEntries(Table table) {
+    table.refresh();
+    return SparkTableUtil.loadMetadataTable(spark, table, MetadataTableType.ENTRIES)
+        .filter("status < 2")
+        .collectAsList();
+  }
+
+  private List<Integer> currentSortOrderIds(Table table) {
+    return currentEntries(table).stream()
+        .map(row -> row.getStruct(row.fieldIndex("data_file")))
+        .map(dataFile -> (Integer) dataFile.getAs("sort_order_id"))
+        .collect(Collectors.toList());
+  }
+
+  private List<DataFile> currentDataFiles(Table table) {
+    table.refresh();
+    return Streams.stream(table.newScan().planFiles())
+        .map(FileScanTask::file)
+        .collect(Collectors.toList());
   }
 
   protected int averageFileSize(Table table) {

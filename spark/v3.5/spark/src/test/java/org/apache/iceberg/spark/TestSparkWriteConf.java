@@ -682,6 +682,47 @@ public class TestSparkWriteConf extends TestBaseWithCatalog {
     }
   }
 
+  @TestTemplate
+  public void testDeleteFileReplicationFromSessionConf() {
+    Table table = validationCatalog.loadTable(tableIdent);
+
+    withSQLConf(
+        ImmutableMap.of(SparkSQLProperties.DELETE_FILE_REPLICATION, "6"),
+        () -> {
+          SparkWriteConf writeConf = new SparkWriteConf(spark, table, ImmutableMap.of());
+          assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 6);
+        });
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationFromTableProperty() {
+    Table table = validationCatalog.loadTable(tableIdent);
+    table.updateProperties().set(TableProperties.DELETE_FILE_REPLICATION, "4").commit();
+
+    SparkWriteConf writeConf = new SparkWriteConf(spark, table, ImmutableMap.of());
+    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 4);
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationPrecedence() {
+    Table table = validationCatalog.loadTable(tableIdent);
+    table.updateProperties().set(TableProperties.DELETE_FILE_REPLICATION, "4").commit();
+
+    withSQLConf(
+        ImmutableMap.of(SparkSQLProperties.DELETE_FILE_REPLICATION, "6"),
+        () -> {
+          // session conf overrides the table property
+          SparkWriteConf writeConf = new SparkWriteConf(spark, table, ImmutableMap.of());
+          assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 6);
+
+          // write option overrides both
+          writeConf =
+              new SparkWriteConf(
+                  spark, table, ImmutableMap.of(SparkWriteOptions.DELETE_FILE_REPLICATION, "2"));
+          assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 2);
+        });
+  }
+
   private void checkMode(DistributionMode expectedMode, SparkWriteConf writeConf) {
     assertThat(writeConf.distributionMode()).isEqualTo(expectedMode);
     assertThat(writeConf.copyOnWriteDistributionMode(DELETE)).isEqualTo(expectedMode);

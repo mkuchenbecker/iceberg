@@ -162,9 +162,11 @@ public class TestBuildOrcProjection {
                     required(3, "c", Types.LongType.get()),
                     required(4, "d", Types.LongType.get()))));
 
+    // Expectation follows LinkedIn's openhouse-1.5.2 behavior; it replaced Apache's
+    // "Missing required field: b.d (long)".
     assertThatThrownBy(() -> ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema))
         .isInstanceOf(IllegalArgumentException.class)
-        .hasMessage("Missing required field: b.d (long)");
+        .hasMessage("Field 4 of type long is required and was not found.");
   }
 
   @Test
@@ -189,9 +191,11 @@ public class TestBuildOrcProjection {
                         .withInitialDefault(Literal.of(34L))
                         .build())));
 
+    // Expectation follows LinkedIn's openhouse-1.5.2 behavior; it replaced Apache's
+    // UnsupportedOperationException "ORC cannot read default value for field b.d (long): 34".
     assertThatThrownBy(() -> ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema))
-        .isInstanceOf(UnsupportedOperationException.class)
-        .hasMessage("ORC cannot read default value for field b.d (long): 34");
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("Field 4 of type long is required and was not found.");
   }
 
   @Test

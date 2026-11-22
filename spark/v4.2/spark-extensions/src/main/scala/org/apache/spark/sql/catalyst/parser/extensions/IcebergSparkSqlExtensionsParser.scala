@@ -54,6 +54,11 @@ class IcebergSparkSqlExtensionsParser(delegate: ParserInterface)
   private lazy val substitutor = substitutorCtor.newInstance(SQLConf.get)
   private lazy val astBuilder = new IcebergSqlExtensionsAstBuilder(delegate)
 
+  private def shouldRewriteViewCommands: Boolean = {
+    // default true to preserve existing behavior
+    SQLConf.get.getConfString("spark.sql.iceberg.rewriteViewCommands.enabled", "true").toBoolean
+  }
+
   /**
    * Parse a string to a DataType.
    */
@@ -143,7 +148,11 @@ class IcebergSparkSqlExtensionsParser(delegate: ParserInterface)
       parse(sqlTextAfterSubstitution) { parser => astBuilder.visit(parser.singleStatement()) }
         .asInstanceOf[LogicalPlan]
     } else {
-      RewriteViewCommands(SparkSession.active).apply(delegateParse(sqlText))
+      if (shouldRewriteViewCommands) {
+        RewriteViewCommands(SparkSession.active).apply(delegateParse(sqlText))
+      } else {
+        delegateParse(sqlText)
+      }
     }
   }
 

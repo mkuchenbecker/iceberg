@@ -25,12 +25,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.File;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.ToLongFunction;
 import java.util.stream.Collectors;
+import org.apache.iceberg.AppendFiles;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DataFiles;
+import org.apache.iceberg.DeleteFile;
+import org.apache.iceberg.FileMetadata;
 import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.MockFileScanTask;
 import org.apache.iceberg.RewriteJobOrder;
@@ -45,6 +50,7 @@ import org.apache.iceberg.relocated.com.google.common.collect.ImmutableSet;
 import org.apache.iceberg.relocated.com.google.common.collect.Iterables;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.relocated.com.google.common.collect.Maps;
+import org.apache.iceberg.util.StructLikeMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -615,6 +621,354 @@ class TestBinPackRewriteFilePlanner {
             .map(List::size)
             .reduce(0, Integer::sum);
     assertThat(fileScanTasks).isLessThanOrEqualTo(numFiles).isLessThanOrEqualTo(500);
+  }
+
+  @Test
+  void testJobOrderFilesMinSequenceNumberAsc() {
+    addFilesInSeparateCommits(
+        newDataFile("data_bucket=2", 50),
+        newDataFile("data_bucket=1", 11),
+        newDataFile("data_bucket=1", 11),
+        newDataFile("data_bucket=0", 10),
+        newDataFile("data_bucket=0", 10));
+
+    List<RewriteFileGroup> groups = planGroups(RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, null);
+
+    // minimum file sequence numbers of the groups: bucket=2 -> 1, bucket=1 -> 2, bucket=0 -> 4
+    assertThat(groups.stream().map(RewriteFileGroup::minFileSequenceNumber))
+        .containsExactly(1L, 2L, 4L);
+    assertThat(groups.stream().map(group -> group.info().partition().get(0, Integer.class)))
+        .containsExactly(2, 1, 0);
+  }
+
+  @Test
+  void testJobOrderFilesMinSequenceNumberDesc() {
+    addFilesInSeparateCommits(
+        newDataFile("data_bucket=2", 50),
+        newDataFile("data_bucket=1", 11),
+        newDataFile("data_bucket=1", 11),
+        newDataFile("data_bucket=0", 10),
+        newDataFile("data_bucket=0", 10));
+
+    List<RewriteFileGroup> groups =
+        planGroups(RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_DESC, null);
+
+    assertThat(groups.stream().map(RewriteFileGroup::minFileSequenceNumber))
+        .containsExactly(4L, 2L, 1L);
+    assertThat(groups.stream().map(group -> group.info().partition().get(0, Integer.class)))
+        .containsExactly(0, 1, 2);
+  }
+
+  @Test
+  void testMaxTotalFilesSizeBytesSelectsOldestFilesFirst() {
+    DataFile d = newDataFile("data_bucket=2", 50);
+    DataFile b = newDataFile("data_bucket=1", 11);
+    DataFile c = newDataFile("data_bucket=1", 11);
+    DataFile a = newDataFile("data_bucket=0", 10);
+    DataFile e = newDataFile("data_bucket=0", 10);
+    addFilesInSeparateCommits(d, b, c, a, e);
+
+    // all files within the budget
+    assertThat(
+            selectedFiles(
+                RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, String.valueOf(50 + 11 + 11 + 20)))
+        .containsExactlyInAnyOrder(
+            d.location(), b.location(), c.location(), a.location(), e.location());
+
+    // the budget is exactly the size of the 3 oldest files: they are all included
+    assertThat(
+            selectedFiles(
+                RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, String.valueOf(50 + 11 + 11)))
+        .containsExactlyInAnyOrder(d.location(), b.location(), c.location());
+
+    // one byte less: the file crossing the budget is excluded
+    assertThat(
+            selectedFiles(
+                RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, String.valueOf(50 + 11 + 10)))
+        .containsExactlyInAnyOrder(d.location(), b.location());
+
+    // exactly the first file
+    assertThat(selectedFiles(RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, "50"))
+        .containsExactly(d.location());
+
+    // the very first file does not fit: nothing is selected
+    assertThat(selectedFiles(RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, "49")).isEmpty();
+  }
+
+  @Test
+  void testMaxTotalFilesSizeBytesSelectsNewestFilesFirst() {
+    DataFile d = newDataFile("data_bucket=2", 50);
+    DataFile b = newDataFile("data_bucket=1", 11);
+    DataFile c = newDataFile("data_bucket=1", 11);
+    DataFile a = newDataFile("data_bucket=0", 10);
+    DataFile e = newDataFile("data_bucket=0", 12);
+    addFilesInSeparateCommits(d, b, c, a, e);
+
+    // newest first: e (12), a (10), c (11), b (11), d (50)
+    assertThat(selectedFiles(RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_DESC, "33"))
+        .containsExactlyInAnyOrder(e.location(), a.location(), c.location());
+    assertThat(selectedFiles(RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_DESC, "32"))
+        .containsExactlyInAnyOrder(e.location(), a.location());
+  }
+
+  @Test
+  void testMaxTotalFilesSizeBytesStopsAtFirstFileThatDoesNotFit() {
+    DataFile x = newDataFile("data_bucket=0", 10);
+    DataFile y = newDataFile("data_bucket=0", 100);
+    DataFile z = newDataFile("data_bucket=0", 10);
+    addFilesInSeparateCommits(x, y, z);
+
+    // z would fit into the remaining budget, but selection stops at y
+    assertThat(selectedFiles(RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, "30"))
+        .containsExactly(x.location());
+  }
+
+  @Test
+  void testMaxTotalFilesSizeBytesWithoutJobOrderUsesScanOrder() {
+    // a single commit (one manifest) makes the order of the scan tasks deterministic
+    addFilesInOneCommit(
+        newDataFile("data_bucket=2", 50),
+        newDataFile("data_bucket=1", 11),
+        newDataFile("data_bucket=1", 11),
+        newDataFile("data_bucket=0", 10),
+        newDataFile("data_bucket=0", 10));
+
+    List<FileScanTask> scanOrder = Lists.newArrayList(table.newScan().planFiles());
+    long budget = scanOrder.get(0).length() + scanOrder.get(1).length() + scanOrder.get(2).length();
+
+    assertThat(selectedFiles(RewriteJobOrder.NONE, String.valueOf(budget)))
+        .containsExactlyInAnyOrder(
+            scanOrder.get(0).file().location(),
+            scanOrder.get(1).file().location(),
+            scanOrder.get(2).file().location());
+  }
+
+  @Test
+  void testMaxTotalFilesSizeBytesAppliesBeforeFilteringFiles() {
+    DataFile big = newDataFile("data_bucket=0", 100);
+    DataFile small1 = newDataFile("data_bucket=0", 10);
+    DataFile small2 = newDataFile("data_bucket=0", 10);
+    addFilesInSeparateCommits(big, small1, small2);
+
+    Map<String, String> options =
+        ImmutableMap.of(
+            BinPackRewriteFilePlanner.TARGET_FILE_SIZE_BYTES, "100",
+            BinPackRewriteFilePlanner.MIN_INPUT_FILES, "2");
+
+    BinPackRewriteFilePlanner unbudgeted = new BinPackRewriteFilePlanner(table);
+    unbudgeted.init(options);
+    assertThat(unbudgeted.plan().totalGroupCount())
+        .as("The two small files are rewritten when there is no budget")
+        .isEqualTo(1);
+
+    // "big" is not a rewrite candidate, but it still consumes the budget as it is selected first
+    Map<String, String> budgeted = Maps.newHashMap(options);
+    budgeted.put(REWRITE_JOB_ORDER, RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC.orderName());
+    budgeted.put(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, "105");
+    BinPackRewriteFilePlanner planner = new BinPackRewriteFilePlanner(table);
+    planner.init(budgeted);
+    assertThat(planner.plan().totalGroupCount()).isZero();
+  }
+
+  @Test
+  void testMaxTotalFilesSizeBytesUnsetOrNullMeansNoLimit() {
+    addFiles();
+    List<String> all = selectedFiles(RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, null);
+    assertThat(all).hasSize(6);
+
+    Map<String, String> options = Maps.newHashMap(REWRITE_ALL);
+    options.put(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, null);
+    BinPackRewriteFilePlanner planner = new BinPackRewriteFilePlanner(table);
+    planner.init(options);
+    assertThat(planner.plan().totalGroupCount()).isEqualTo(3);
+
+    assertThat(
+            selectedFiles(
+                RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, String.valueOf(Long.MAX_VALUE)))
+        .containsExactlyInAnyOrderElementsOf(all);
+    assertThat(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES_DEFAULT).isEqualTo(Long.MAX_VALUE);
+  }
+
+  @Test
+  void testMaxTotalFilesSizeBytesZeroAndNegativeSelectNothing() {
+    addFiles();
+    assertThat(selectedFiles(RewriteJobOrder.NONE, "0")).isEmpty();
+    assertThat(selectedFiles(RewriteJobOrder.NONE, "-1")).isEmpty();
+  }
+
+  @Test
+  void testMaxTotalFilesSizeBytesIsNotValidated() {
+    BinPackRewriteFilePlanner planner = new BinPackRewriteFilePlanner(table);
+    planner.init(ImmutableMap.of(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, "-5"));
+    assertThatThrownBy(
+            () -> planner.init(ImmutableMap.of(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, "abc")))
+        .isInstanceOf(NumberFormatException.class);
+  }
+
+  @Test
+  void testMaxTotalFilesSizeBytesIgnoresDeleteFiles() throws Exception {
+    // position delete files are not allowed in v3 tables
+    TestTables.TestTable v2Table =
+        TestTables.create(new File(tableDir, "v2"), "test-v2", TestBase.SCHEMA, TestBase.SPEC, 2);
+    DataFile data = newDataFile("data_bucket=0", 10);
+    DeleteFile deletes =
+        FileMetadata.deleteFileBuilder(TestBase.SPEC)
+            .ofPositionDeletes()
+            .withPath("/path/to/deletes-" + UUID.randomUUID() + ".parquet")
+            .withFileSizeInBytes(100)
+            .withPartitionPath("data_bucket=0")
+            .withRecordCount(1)
+            .build();
+    v2Table.newAppend().appendFile(data).commit();
+    v2Table.newRowDelta().addDeletes(deletes).commit();
+
+    FileScanTask task = Iterables.getOnlyElement(v2Table.newScan().planFiles());
+    assertThat(task.length()).isEqualTo(10);
+    assertThat(task.sizeBytes()).isEqualTo(110);
+
+    // only the size of the data file counts towards the budget, the delete file is ignored
+    Map<String, String> options = Maps.newHashMap(REWRITE_ALL);
+    options.put(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, "10");
+    BinPackRewriteFilePlanner planner = new BinPackRewriteFilePlanner(v2Table);
+    planner.init(options);
+    assertThat(planner.plan().totalGroupCount()).isEqualTo(1);
+
+    options.put(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, "9");
+    planner = new BinPackRewriteFilePlanner(v2Table);
+    planner.init(options);
+    assertThat(planner.plan().totalGroupCount()).isZero();
+  }
+
+  @ParameterizedTest
+  @EnumSource(
+      value = RewriteJobOrder.class,
+      names = {"NONE", "FILES_DESC", "FILES_ASC", "BYTES_DESC", "BYTES_ASC"})
+  void testPlanWithoutBudgetMatchesPlanningScanTasksDirectly(RewriteJobOrder order) {
+    // a single commit (one manifest) makes the order of the scan tasks deterministic
+    addFilesInOneCommit(
+        newDataFile("data_bucket=2", 50),
+        newDataFile("data_bucket=1", 11),
+        newDataFile("data_bucket=1", 11),
+        newDataFile("data_bucket=0", 10),
+        newDataFile("data_bucket=0", 10),
+        newDataFile("data_bucket=0", 10),
+        newDataFile("data_bucket=3", 10));
+
+    Map<String, String> options = Maps.newHashMap(REWRITE_ALL);
+    options.put(REWRITE_JOB_ORDER, order.orderName());
+    options.put(BinPackRewriteFilePlanner.MAX_FILE_GROUP_SIZE_BYTES, "25");
+
+    // Reference: group the scan tasks of the table by partition in scan order, bin-pack each
+    // partition, and order the groups with a test local comparator. This is what the planner did
+    // before max-total-files-size-bytes and the sequence number orders were added.
+    BinPackRewriteFilePlanner referencePlanner = new BinPackRewriteFilePlanner(table);
+    referencePlanner.init(options);
+    StructLikeMap<List<FileScanTask>> byPartition =
+        StructLikeMap.create(table.spec().partitionType());
+    for (FileScanTask task : table.newScan().planFiles()) {
+      byPartition
+          .computeIfAbsent(task.file().partition(), unused -> Lists.newArrayList())
+          .add(task);
+    }
+
+    List<List<String>> expected = Lists.newArrayList();
+    byPartition
+        .values()
+        .forEach(
+            tasks ->
+                referencePlanner
+                    .planFileGroups(tasks)
+                    .forEach(
+                        group ->
+                            expected.add(
+                                group.stream()
+                                    .map(task -> task.file().location())
+                                    .collect(Collectors.toList()))));
+    Map<String, FileScanTask> tasksByPath = Maps.newHashMap();
+    byPartition
+        .values()
+        .forEach(tasks -> tasks.forEach(t -> tasksByPath.put(t.file().location(), t)));
+    ToLongFunction<List<String>> bytes =
+        group -> group.stream().mapToLong(path -> tasksByPath.get(path).length()).sum();
+    switch (order) {
+      case BYTES_ASC:
+        expected.sort(Comparator.comparingLong(bytes));
+        break;
+      case BYTES_DESC:
+        expected.sort(Comparator.comparingLong(bytes).reversed());
+        break;
+      case FILES_ASC:
+        expected.sort(Comparator.comparingInt(List::size));
+        break;
+      case FILES_DESC:
+        expected.sort(Comparator.comparingInt(List<String>::size).reversed());
+        break;
+      default:
+        break;
+    }
+
+    BinPackRewriteFilePlanner planner = new BinPackRewriteFilePlanner(table);
+    planner.init(options);
+    List<List<String>> actual =
+        Lists.newArrayList(planner.plan().groups().iterator()).stream()
+            .map(
+                group ->
+                    group.fileScanTasks().stream()
+                        .map(task -> task.file().location())
+                        .collect(Collectors.toList()))
+            .collect(Collectors.toList());
+
+    // groups of different partitions with the same key (bytes or files) are ordered by the
+    // iteration order of the partitions, which is not specified, so ties are not compared
+    assertThat(actual).isNotEmpty().containsExactlyInAnyOrderElementsOf(expected);
+    switch (order) {
+      case BYTES_ASC:
+      case BYTES_DESC:
+        assertThat(actual.stream().mapToLong(bytes).boxed().collect(Collectors.toList()))
+            .isEqualTo(expected.stream().mapToLong(bytes).boxed().collect(Collectors.toList()));
+        break;
+      case FILES_ASC:
+      case FILES_DESC:
+        assertThat(actual.stream().map(List::size).collect(Collectors.toList()))
+            .isEqualTo(expected.stream().map(List::size).collect(Collectors.toList()));
+        break;
+      default:
+        break;
+    }
+  }
+
+  private void addFilesInOneCommit(DataFile... files) {
+    AppendFiles append = table.newAppend();
+    for (DataFile file : files) {
+      append.appendFile(file);
+    }
+
+    append.commit();
+  }
+
+  private void addFilesInSeparateCommits(DataFile... files) {
+    for (DataFile file : files) {
+      table.newAppend().appendFile(file).commit();
+    }
+  }
+
+  private List<RewriteFileGroup> planGroups(RewriteJobOrder order, String maxTotalFilesSizeBytes) {
+    Map<String, String> options = Maps.newHashMap(REWRITE_ALL);
+    options.put(REWRITE_JOB_ORDER, order.orderName());
+    if (maxTotalFilesSizeBytes != null) {
+      options.put(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, maxTotalFilesSizeBytes);
+    }
+
+    BinPackRewriteFilePlanner planner = new BinPackRewriteFilePlanner(table);
+    planner.init(options);
+    return Lists.newArrayList(planner.plan().groups().iterator());
+  }
+
+  private List<String> selectedFiles(RewriteJobOrder order, String maxTotalFilesSizeBytes) {
+    return planGroups(order, maxTotalFilesSizeBytes).stream()
+        .flatMap(group -> group.fileScanTasks().stream())
+        .map(task -> task.file().location())
+        .collect(Collectors.toList());
   }
 
   private void addFiles() {

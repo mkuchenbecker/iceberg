@@ -101,6 +101,7 @@ public class BinPackRewriteFilePlanner
   private double deleteRatioThreshold;
   private RewriteJobOrder rewriteJobOrder;
   private Integer maxFilesToRewrite;
+  private long maxTotalFilesSizeBytes;
 
   public BinPackRewriteFilePlanner(Table table) {
     this(table, Expressions.alwaysTrue());
@@ -154,6 +155,11 @@ public class BinPackRewriteFilePlanner
                 RewriteDataFiles.REWRITE_JOB_ORDER,
                 RewriteDataFiles.REWRITE_JOB_ORDER_DEFAULT));
     this.maxFilesToRewrite = maxFilesToRewrite(options);
+    this.maxTotalFilesSizeBytes =
+        PropertyUtil.propertyAsLong(
+            options,
+            RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES,
+            RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES_DEFAULT);
   }
 
   private int deleteFileThreshold(Map<String, String> options) {
@@ -297,9 +303,31 @@ public class BinPackRewriteFilePlanner
     CloseableIterable<FileScanTask> fileScanTasks = scan.planFiles();
 
     try {
+      List<FileScanTask> allTasks = Lists.newArrayList(fileScanTasks);
+      // Sort tasks by file sequence number in order to rewrite older (newer) files first
+      if (RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC.equals(rewriteJobOrder)
+          || RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_DESC.equals(rewriteJobOrder)) {
+        allTasks.sort(RewriteFileGroup.taskComparator(rewriteJobOrder));
+      }
+
+      // Pick tasks until the budget is exhausted, the first task which does not fit stops the
+      // selection
+      long pickedTasksSizeBytes = 0;
+      int pickedTasksCount = 0;
+      for (FileScanTask task : allTasks) {
+        if (pickedTasksSizeBytes + task.length() <= maxTotalFilesSizeBytes) {
+          pickedTasksCount++;
+          pickedTasksSizeBytes += task.length();
+        } else {
+          break;
+        }
+      }
+
+      List<FileScanTask> pickedTasks = allTasks.subList(0, pickedTasksCount);
+
       Types.StructType partitionType = table().spec().partitionType();
       StructLikeMap<List<FileScanTask>> filesByPartition =
-          groupByPartition(table(), partitionType, fileScanTasks);
+          groupByPartition(table(), partitionType, pickedTasks);
       return filesByPartition.transformValues(tasks -> ImmutableList.copyOf(planFileGroups(tasks)));
     } finally {
       try {

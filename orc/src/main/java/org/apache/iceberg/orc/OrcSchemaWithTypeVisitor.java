@@ -41,7 +41,7 @@ public abstract class OrcSchemaWithTypeVisitor<T> {
         if (ORCSchemaUtil.VARIANT.equalsIgnoreCase(structType)) {
           return visitVariant(iType != null ? iType.asVariantType() : null, schema, visitor);
         } else {
-          return visitRecord(iType != null ? iType.asStructType() : null, schema, visitor);
+          return visitor.visitRecord(iType != null ? iType.asStructType() : null, schema, visitor);
         }
 
       case UNION:
@@ -67,7 +67,11 @@ public abstract class OrcSchemaWithTypeVisitor<T> {
     }
   }
 
-  private static <T> T visitRecord(
+  /**
+   * Visits a struct. Overridden by Spark to inject {@code initial-default} values into {@code
+   * idToConstant} for fields omitted from the ORC projection.
+   */
+  protected T visitRecord(
       Types.StructType struct, TypeDescription record, OrcSchemaWithTypeVisitor<T> visitor) {
     List<TypeDescription> fields = record.getChildren();
     List<String> names = record.getFieldNames();

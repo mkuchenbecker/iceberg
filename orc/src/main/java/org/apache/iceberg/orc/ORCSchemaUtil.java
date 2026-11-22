@@ -47,6 +47,32 @@ public final class ORCSchemaUtil {
     LONG
   }
 
+  /**
+   * Where the Iceberg field IDs in an ORC schema came from.
+   *
+   * <p>This is the provenance of the IDs, not a statement about the file's contents. It decides
+   * whether the absence of an ID may be read as "this column was never written", which in turn
+   * decides whether a declared {@code initial-default} may be filled on read.
+   */
+  enum FieldIdSource {
+    /**
+     * The IDs were read from {@code iceberg.id} column attributes written into the file by {@link
+     * ORCSchemaUtil#convert(Schema)}. A field with no ID was genuinely never written, so a declared
+     * default may be filled.
+     */
+    EMBEDDED,
+
+    /**
+     * The IDs were derived at read time by {@link ORCSchemaUtil#applyNameMapping} matching column
+     * names, because the file carried none of its own — typically a legacy or Hive-migrated file. A
+     * field can look absent merely because its name did not match, for example after a rename the
+     * name mapping no longer covers, while its data is physically present in the file. Filling a
+     * default here would fabricate values over real data, so absent fields are synthesized as null
+     * columns instead.
+     */
+    NAME_MAPPED
+  }
+
   private static class OrcField {
     private final String name;
     private final TypeDescription type;
@@ -318,18 +344,73 @@ public final class ORCSchemaUtil {
    */
   public static TypeDescription buildOrcProjection(
       Schema schema, TypeDescription originalOrcSchema) {
+    // Callers that cannot establish ID provenance get the conservative behavior: never omit for
+    // defaults, matching this method's behavior before defaults were supported.
+    return buildOrcProjection(schema, originalOrcSchema, FieldIdSource.NAME_MAPPED, false);
+  }
+
+  /**
+   * Builds the ORC read projection, optionally omitting absent fields that declare an {@code
+   * initial-default} so a default-aware reader can fill them via {@code idToConstant}.
+   *
+   * <p>A scalar field at any nesting level is <em>omitted</em> from the read projection when it
+   * declares an {@code initial-default}, is absent from the data file, {@code fieldIdSource} is
+   * {@link FieldIdSource#EMBEDDED}, and the configured reader supports initial defaults. An
+   * id-binding reader then sees no column for that field and fills the declared default as a
+   * per-file constant. Otherwise the field is synthesized as a null column, preserving the behavior
+   * of readers that have not opted in.
+   *
+   * @param fieldIdSource where the IDs in {@code originalOrcSchema} came from; see {@link
+   *     FieldIdSource}
+   * @param supportsInitialDefaults whether the configured reader can fill an omitted field's
+   *     initial default
+   */
+  static TypeDescription buildOrcProjection(
+      Schema schema,
+      TypeDescription originalOrcSchema,
+      FieldIdSource fieldIdSource,
+      boolean supportsInitialDefaults) {
     final Map<Integer, OrcField> icebergToOrc = icebergToOrcMapping("root", originalOrcSchema);
-    return buildOrcProjection(schema, Integer.MIN_VALUE, schema.asStruct(), true, icebergToOrc);
+    return buildOrcProjection(
+        Integer.MIN_VALUE,
+        schema.asStruct(),
+        true,
+        fieldIdSource,
+        supportsInitialDefaults,
+        icebergToOrc);
+  }
+
+  private static boolean isOmittableDefault(
+      Types.NestedField field,
+      FieldIdSource fieldIdSource,
+      boolean supportsInitialDefaults,
+      Map<Integer, OrcField> mapping) {
+    // Only scalars reach here with a non-null default: Types.NestedField#castDefault rejects a
+    // default on any nested type at construction time.
+    return supportsInitialDefaults
+        && field.initialDefault() != null
+        && !mapping.containsKey(field.fieldId())
+        && fieldIdSource == FieldIdSource.EMBEDDED;
   }
 
   private static TypeDescription buildOrcProjection(
-      Schema root, Integer fieldId, Type type, boolean isRequired, Map<Integer, OrcField> mapping) {
+      Integer fieldId,
+      Type type,
+      boolean isRequired,
+      FieldIdSource fieldIdSource,
+      boolean supportsInitialDefaults,
+      Map<Integer, OrcField> mapping) {
     final TypeDescription orcType;
 
     switch (type.typeId()) {
       case STRUCT:
         orcType = TypeDescription.createStruct();
         for (Types.NestedField nestedField : type.asStructType().fields()) {
+          if (isOmittableDefault(nestedField, fieldIdSource, supportsInitialDefaults, mapping)) {
+            // The field declares a default, is absent, and the file carries its own Iceberg field
+            // IDs. Omit it so a default-aware reader fills it through the existing constant path.
+            continue;
+          }
           // Using suffix _r to avoid potential underlying issues in ORC reader
           // with reused column names between ORC and Iceberg;
           // e.g. renaming column c -> d and adding new column d
@@ -339,10 +420,11 @@ public final class ORCSchemaUtil {
                   .orElseGet(() -> nestedField.name() + "_r" + nestedField.fieldId());
           TypeDescription childType =
               buildOrcProjection(
-                  root,
                   nestedField.fieldId(),
                   nestedField.type(),
                   isRequired && nestedField.isRequired(),
+                  fieldIdSource,
+                  supportsInitialDefaults,
                   mapping);
 
           if (childType != null) {
@@ -354,10 +436,11 @@ public final class ORCSchemaUtil {
         Types.ListType list = (Types.ListType) type;
         TypeDescription elementType =
             buildOrcProjection(
-                root,
                 list.elementId(),
                 list.elementType(),
                 isRequired && list.isElementRequired(),
+                fieldIdSource,
+                supportsInitialDefaults,
                 mapping);
         Preconditions.checkArgument(elementType != null, "Invalid element type: unknown");
         orcType = TypeDescription.createList(elementType);
@@ -365,10 +448,21 @@ public final class ORCSchemaUtil {
       case MAP:
         Types.MapType map = (Types.MapType) type;
         TypeDescription keyType =
-            buildOrcProjection(root, map.keyId(), map.keyType(), isRequired, mapping);
+            buildOrcProjection(
+                map.keyId(),
+                map.keyType(),
+                isRequired,
+                fieldIdSource,
+                supportsInitialDefaults,
+                mapping);
         TypeDescription valueType =
             buildOrcProjection(
-                root, map.valueId(), map.valueType(), isRequired && map.isValueRequired(), mapping);
+                map.valueId(),
+                map.valueType(),
+                isRequired && map.isValueRequired(),
+                fieldIdSource,
+                supportsInitialDefaults,
+                mapping);
         Preconditions.checkArgument(keyType != null, "Invalid key type: unknown");
         Preconditions.checkArgument(valueType != null, "Invalid value type: unknown");
         orcType = TypeDescription.createMap(keyType, valueType);
@@ -395,21 +489,8 @@ public final class ORCSchemaUtil {
             orcType = originalType.clone();
           }
         } else {
-          Types.NestedField field = root.findField(fieldId);
-          if (isRequired) {
-            Preconditions.checkArgument(
-                field.initialDefault() != null,
-                "Missing required field: %s (%s)",
-                root.findColumnName(fieldId),
-                type);
-          }
-
-          if (field.initialDefault() != null) {
-            throw new UnsupportedOperationException(
-                String.format(
-                    "ORC cannot read default value for field %s (%s): %s",
-                    root.findColumnName(fieldId), type, field.initialDefault()));
-          }
+          Preconditions.checkArgument(
+              !isRequired, "Field %s of type %s is required and was not found.", fieldId, type);
 
           orcType = convert(fieldId, type, false);
         }
@@ -521,6 +602,45 @@ public final class ORCSchemaUtil {
 
   static boolean hasIds(TypeDescription orcSchema) {
     return OrcSchemaVisitor.visit(orcSchema, new HasIds());
+  }
+
+  /**
+   * Returns whether every column in the file carries its own Iceberg field ID.
+   *
+   * <p>{@link #hasIds(TypeDescription)} is satisfied by a single annotated column, which is the
+   * right test for choosing ID-based resolution over a name mapping. It is not sufficient for
+   * omitting a defaulted field: in a partially annotated file an unannotated physical column is
+   * indistinguishable from an absent one, so omitting it would replace real data with the default.
+   * Requiring complete annotation keeps such files on the prior null-synthesizing path.
+   *
+   * <p>The file's outermost struct is not itself annotated, so only its descendants are checked.
+   * The metadata and value children of a variant are not Iceberg columns and carry no ID, so a
+   * variant is checked as a single column.
+   */
+  static boolean hasAllIds(TypeDescription orcSchema) {
+    List<TypeDescription> children = orcSchema.getChildren();
+    if (children == null) {
+      return true;
+    }
+
+    return children.stream().allMatch(ORCSchemaUtil::isFullyAnnotated);
+  }
+
+  private static boolean isFullyAnnotated(TypeDescription orcType) {
+    if (!icebergID(orcType).isPresent()) {
+      return false;
+    }
+
+    if (isVariant(orcType)) {
+      return true;
+    }
+
+    return hasAllIds(orcType);
+  }
+
+  private static boolean isVariant(TypeDescription orcType) {
+    return orcType.getCategory() == TypeDescription.Category.STRUCT
+        && VARIANT.equalsIgnoreCase(orcType.getAttributeValue(ICEBERG_STRUCT_TYPE_ATTRIBUTE));
   }
 
   static TypeDescription applyNameMapping(TypeDescription orcSchema, NameMapping nameMapping) {

@@ -36,6 +36,7 @@ import org.apache.iceberg.spark.OrcBatchReadConf;
 import org.apache.iceberg.spark.ParquetBatchReadConf;
 import org.apache.iceberg.spark.SparkReadConf;
 import org.apache.iceberg.spark.SparkUtil;
+import org.apache.iceberg.types.TypeUtil;
 import org.apache.iceberg.types.Types;
 import org.apache.spark.api.java.JavaSparkContext;
 import org.apache.spark.broadcast.Broadcast;
@@ -178,9 +179,16 @@ class SparkBatch implements Batch {
   // conditions for using ORC batch reads:
   // - ORC vectorization is enabled
   // - all tasks are of type FileScanTask and read only ORC files with no delete files
+  // Defaulted projections stay on the row reader; batched ORC does not fill initial-defaults.
   private boolean useOrcBatchReads() {
     return readConf.orcVectorizationEnabled()
+        && hasNoInitialDefaults(expectedSchema)
         && taskGroups.stream().allMatch(this::supportsOrcBatchReads);
+  }
+
+  static boolean hasNoInitialDefaults(Schema schema) {
+    return TypeUtil.indexById(schema.asStruct()).values().stream()
+        .noneMatch(field -> field.initialDefault() != null);
   }
 
   private boolean supportsOrcBatchReads(ScanTask task) {

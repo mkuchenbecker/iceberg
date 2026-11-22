@@ -28,6 +28,7 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import org.apache.iceberg.Schema;
+import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.expressions.Literal;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
@@ -70,6 +71,55 @@ public class TestTypeUtil {
     assertThat(actualSchema.identifierFieldIds())
         .as("identifier field ID should change based on source schema")
         .isEqualTo(sourceSchema.identifierFieldIds());
+  }
+
+  @Test
+  public void testAssignFreshIdsPreservesDefaults() {
+    Types.NestedField field =
+        Types.NestedField.optional("country")
+            .withId(10)
+            .ofType(Types.StringType.get())
+            .withInitialDefault(Expressions.lit("US"))
+            .withWriteDefault(Expressions.lit("CA"))
+            .build();
+
+    Schema reassigned = TypeUtil.assignIncreasingFreshIds(new Schema(field));
+    Types.NestedField reassignedField = reassigned.findField("country");
+
+    assertThat(reassignedField.fieldId()).isEqualTo(1);
+    assertThat(reassignedField.initialDefault()).isEqualTo("US");
+    assertThat(reassignedField.writeDefault()).isEqualTo("CA");
+  }
+
+  @Test
+  public void testSelectPreservesDefaultsOfRetainedFields() {
+    Types.NestedField country =
+        Types.NestedField.optional("country")
+            .withId(3)
+            .ofType(Types.StringType.get())
+            .withInitialDefault(Expressions.lit("US"))
+            .withWriteDefault(Expressions.lit("CA"))
+            .build();
+    Schema schema =
+        new Schema(
+            required(1, "id", Types.LongType.get()),
+            optional(
+                2,
+                "loc",
+                Types.StructType.of(country, optional(4, "city", Types.StringType.get()))));
+
+    // dropping city alters the type of loc, so loc is rebuilt by the column pruning visitor
+    Schema selected = TypeUtil.select(schema, Sets.newHashSet(3));
+    Types.NestedField selectedCountry = selected.findField("loc.country");
+
+    assertThat(selected.findField("loc").type().asStructType().fields()).hasSize(1);
+    assertThat(selectedCountry.initialDefault()).isEqualTo("US");
+    assertThat(selectedCountry.writeDefault()).isEqualTo("CA");
+
+    Schema notSelected = TypeUtil.selectNot(schema, Sets.newHashSet(4));
+    Types.NestedField keptCountry = notSelected.findField("loc.country");
+    assertThat(keptCountry.initialDefault()).isEqualTo("US");
+    assertThat(keptCountry.writeDefault()).isEqualTo("CA");
   }
 
   @Test

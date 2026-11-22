@@ -44,9 +44,10 @@ import org.apache.orc.TypeDescription;
 public class ORCFormatModel<D, S, R>
     extends BaseFormatModel<D, S, OrcRowWriter<?>, R, TypeDescription> {
   private final boolean isBatchReader;
+  private final boolean supportsInitialDefaults;
 
   public static <D> ORCFormatModel<PositionDelete<D>, Void, Object> forPositionDeletes() {
-    return new ORCFormatModel<>(PositionDelete.deleteClass(), Void.class, null, null, false);
+    return new ORCFormatModel<>(PositionDelete.deleteClass(), Void.class, null, null, false, false);
   }
 
   public static <D, S> ORCFormatModel<D, S, OrcRowReader<D>> create(
@@ -54,14 +55,26 @@ public class ORCFormatModel<D, S, R>
       Class<S> schemaType,
       WriterFunction<OrcRowWriter<?>, S, TypeDescription> writerFunction,
       ReaderFunction<OrcRowReader<D>, S, TypeDescription> readerFunction) {
-    return new ORCFormatModel<>(type, schemaType, writerFunction, readerFunction, false);
+    return new ORCFormatModel<>(type, schemaType, writerFunction, readerFunction, false, false);
+  }
+
+  /**
+   * Creates a row-based model whose reader fills {@code initial-default} values for fields that are
+   * omitted from the ORC read projection, see {@link ORC.ReadBuilder#supportsInitialDefaults()}.
+   */
+  public static <D, S> ORCFormatModel<D, S, OrcRowReader<D>> createWithInitialDefaults(
+      Class<D> type,
+      Class<S> schemaType,
+      WriterFunction<OrcRowWriter<?>, S, TypeDescription> writerFunction,
+      ReaderFunction<OrcRowReader<D>, S, TypeDescription> readerFunction) {
+    return new ORCFormatModel<>(type, schemaType, writerFunction, readerFunction, false, true);
   }
 
   public static <D, S> ORCFormatModel<D, S, OrcBatchReader<?>> create(
       Class<D> type,
       Class<S> schemaType,
       ReaderFunction<OrcBatchReader<?>, S, TypeDescription> batchReaderFunction) {
-    return new ORCFormatModel<>(type, schemaType, null, batchReaderFunction, true);
+    return new ORCFormatModel<>(type, schemaType, null, batchReaderFunction, true, false);
   }
 
   private ORCFormatModel(
@@ -69,9 +82,11 @@ public class ORCFormatModel<D, S, R>
       Class<S> schemaType,
       WriterFunction<OrcRowWriter<?>, S, TypeDescription> writerFunction,
       ReaderFunction<R, S, TypeDescription> readerFunction,
-      boolean isBatchReader) {
+      boolean isBatchReader,
+      boolean supportsInitialDefaults) {
     super(type, schemaType, writerFunction, readerFunction);
     this.isBatchReader = isBatchReader;
+    this.supportsInitialDefaults = supportsInitialDefaults;
   }
 
   @Override
@@ -86,7 +101,8 @@ public class ORCFormatModel<D, S, R>
 
   @Override
   public ReadBuilder<D, S> readBuilder(InputFile inputFile) {
-    return new ReadBuilderWrapper<>(inputFile, readerFunction(), isBatchReader);
+    return new ReadBuilderWrapper<>(
+        inputFile, readerFunction(), isBatchReader, supportsInitialDefaults);
   }
 
   private static class WriteBuilderWrapper<D, S> implements ModelWriteBuilder<D, S> {
@@ -210,6 +226,7 @@ public class ORCFormatModel<D, S, R>
     private final ORC.ReadBuilder internal;
     private final ReaderFunction<R, S, TypeDescription> readerFunction;
     private final boolean isBatchReader;
+    private final boolean supportsInitialDefaults;
     private S engineSchema;
     private boolean reuseContainers = false;
     private Schema icebergSchema;
@@ -218,10 +235,12 @@ public class ORCFormatModel<D, S, R>
     private ReadBuilderWrapper(
         InputFile inputFile,
         ReaderFunction<R, S, TypeDescription> readerFunction,
-        boolean isBatchReader) {
+        boolean isBatchReader,
+        boolean supportsInitialDefaults) {
       this.internal = ORC.read(inputFile);
       this.readerFunction = readerFunction;
       this.isBatchReader = isBatchReader;
+      this.supportsInitialDefaults = supportsInitialDefaults;
     }
 
     @Override
@@ -303,13 +322,16 @@ public class ORCFormatModel<D, S, R>
                             icebergSchema, typeDescription, engineSchema, idToConstant))
             .build();
       } else {
-        return internal
-            .createReaderFunc(
-                typeDescription ->
-                    (OrcRowReader<?>)
-                        readerFunction.read(
-                            icebergSchema, typeDescription, engineSchema, idToConstant))
-            .build();
+        internal.createReaderFunc(
+            typeDescription ->
+                (OrcRowReader<?>)
+                    readerFunction.read(
+                        icebergSchema, typeDescription, engineSchema, idToConstant));
+        if (supportsInitialDefaults) {
+          internal.supportsInitialDefaults();
+        }
+
+        return internal.build();
       }
     }
   }

@@ -62,7 +62,7 @@ public class SparkFormatModels {
                     icebergSchema, fileSchema, idToConstant)));
 
     FormatModelRegistry.register(
-        ORCFormatModel.create(
+        ORCFormatModel.createWithInitialDefaults(
             InternalRow.class,
             StructType.class,
             (icebergSchema, fileSchema, engineSchema) ->

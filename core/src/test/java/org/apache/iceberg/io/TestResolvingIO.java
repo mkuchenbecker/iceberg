@@ -39,6 +39,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.iceberg.CatalogUtil;
 import org.apache.iceberg.TestHelpers;
 import org.apache.iceberg.hadoop.HadoopFileIO;
+import org.apache.iceberg.hadoop.ReplicationCapturingFileSystem;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.junit.jupiter.api.Test;
@@ -181,5 +182,74 @@ public class TestResolvingIO {
     assertThat(roundTripSerializer.apply(resolvingFileIO).credentials())
         .isEqualTo(storageCredentials)
         .isEqualTo(resolvingFileIO.credentials());
+  }
+
+  @Test
+  public void newOutputFileWithPropertiesIsForwardedToDelegate() throws IOException {
+    Configuration conf = ReplicationCapturingFileSystem.newConf();
+    ResolvingFileIO resolvingFileIO = new ResolvingFileIO();
+    resolvingFileIO.setConf(conf);
+    resolvingFileIO.initialize(ImmutableMap.of());
+
+    String location = new Path(temp.resolve("resolving-replication.txt").toUri()).toString();
+    OutputFile file =
+        resolvingFileIO.newOutputFile(
+            location, ImmutableMap.of(OutputFileFactory.FILE_REPLICATION_FACTOR, "5"));
+    try (PositionOutputStream out = file.create()) {
+      out.write("data".getBytes());
+    }
+
+    assertThat(resolvingFileIO.ioClass(location)).isEqualTo(HadoopFileIO.class);
+    assertThat(ReplicationCapturingFileSystem.capturedReplication("resolving-replication.txt"))
+        .isEqualTo((short) 5);
+  }
+
+  @Test
+  public void newOutputFileWithPropertiesUsesDelegateChosenForLocation() {
+    ResolvingFileIO resolvingFileIO = spy(new ResolvingFileIO());
+    resolvingFileIO.setConf(new Configuration());
+    resolvingFileIO.initialize(ImmutableMap.of());
+    doReturn(RecordingFileIO.class.getName()).when(resolvingFileIO).implFromLocation(any());
+
+    Map<String, String> properties =
+        ImmutableMap.of(OutputFileFactory.FILE_REPLICATION_FACTOR, "3");
+    resolvingFileIO.newOutputFile("/file", properties);
+
+    assertThat(RecordingFileIO.lastLocation).isEqualTo("/file");
+    assertThat(RecordingFileIO.lastProperties).isEqualTo(properties);
+  }
+
+  @Test
+  public void newOutputFileWithPropertiesKeepsDefaultForUnsupportingDelegate() {
+    ResolvingFileIO resolvingFileIO = spy(new ResolvingFileIO());
+    resolvingFileIO.setConf(new Configuration());
+    resolvingFileIO.initialize(ImmutableMap.of());
+
+    // a delegate that does not override the method behaves as the FileIO default does
+    String fileIOWithMixins =
+        mock(FileIO.class, withSettings().extraInterfaces(DelegateFileIO.class))
+            .getClass()
+            .getName();
+    doReturn(fileIOWithMixins).when(resolvingFileIO).implFromLocation(any());
+
+    assertThatThrownBy(
+            () ->
+                resolvingFileIO.newOutputFile(
+                    "/file", ImmutableMap.of(OutputFileFactory.FILE_REPLICATION_FACTOR, "3")))
+        .isInstanceOf(UnsupportedOperationException.class)
+        .hasMessageContaining("is not supported");
+  }
+
+  /** Delegate that records the location and properties of the last newOutputFile call. */
+  public static class RecordingFileIO extends HadoopFileIO {
+    private static String lastLocation;
+    private static Map<String, String> lastProperties;
+
+    @Override
+    public OutputFile newOutputFile(String path, Map<String, String> fileProperties) {
+      lastLocation = path;
+      lastProperties = fileProperties;
+      return null;
+    }
   }
 }

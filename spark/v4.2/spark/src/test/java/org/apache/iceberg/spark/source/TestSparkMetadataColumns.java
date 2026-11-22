@@ -24,6 +24,8 @@ import static org.apache.iceberg.TableProperties.ORC_VECTORIZATION_ENABLED;
 import static org.apache.iceberg.TableProperties.PARQUET_BATCH_SIZE;
 import static org.apache.iceberg.TableProperties.PARQUET_ROW_GROUP_SIZE_BYTES;
 import static org.apache.iceberg.TableProperties.PARQUET_VECTORIZATION_ENABLED;
+import static org.apache.iceberg.TableProperties.WRITE_DISTRIBUTION_MODE;
+import static org.apache.iceberg.TableProperties.WRITE_DISTRIBUTION_MODE_HASH;
 import static org.apache.spark.sql.functions.expr;
 import static org.apache.spark.sql.functions.lit;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -365,6 +367,9 @@ public class TestSparkMetadataColumns extends TestBase {
     // merge-on-read: DELETE writes position delete files instead of rewriting data files.
     // This routes through SupportsDelta which adds _partition to the scan projection.
     properties.put("write.delete.mode", "merge-on-read");
+    // This fork defaults partitioned writes to NONE distribution, which can split the two rows of
+    // the INSERT below across write tasks (and data files). Request HASH so they share one file.
+    properties.put(WRITE_DISTRIBUTION_MODE, WRITE_DISTRIBUTION_MODE_HASH);
 
     String mapTableName = "test_map_partition_collision";
     TestTables.create(
@@ -405,6 +410,9 @@ public class TestSparkMetadataColumns extends TestBase {
     // merge-on-read: DELETE writes position delete files instead of rewriting data files.
     // This routes through SupportsDelta which adds _partition to the scan projection.
     properties.put("write.delete.mode", "merge-on-read");
+    // This fork defaults partitioned writes to NONE distribution, which can split the two rows of
+    // the INSERT below across write tasks (and data files). Request HASH so they share one file.
+    properties.put(WRITE_DISTRIBUTION_MODE, WRITE_DISTRIBUTION_MODE_HASH);
 
     String listTableName = "test_list_partition_collision";
     TestTables.create(

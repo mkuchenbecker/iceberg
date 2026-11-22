@@ -376,10 +376,7 @@ public class SparkScanBuilder extends BaseSparkScanBuilder
   }
 
   private BatchScan buildIcebergBatchScan(
-      Schema projection,
-      boolean ignoreResiduals,
-      boolean withStats,
-      boolean retainRequestedStats) {
+      Schema projection, boolean ignoreResiduals, boolean withStats, boolean retainRequestedStats) {
     if (shouldPinSnapshot() && snapshot == null) {
       return null;
     }

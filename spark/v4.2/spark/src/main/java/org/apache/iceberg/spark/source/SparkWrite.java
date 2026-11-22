@@ -240,9 +240,7 @@ abstract class SparkWrite extends BaseSparkWrite implements Write, RequiresDistr
     commitOperation(operation, description, null);
   }
 
-  private void commitOperation(
-      SnapshotUpdate<?> operation, String description, WriteSummary summary) {
-    LOG.info("Committing {} to table {}", description, table);
+  private void setApplicationProperties(SnapshotUpdate<?> operation) {
     if (applicationId != null) {
       operation.set("spark.app.id", applicationId);
     }
@@ -250,6 +248,12 @@ abstract class SparkWrite extends BaseSparkWrite implements Write, RequiresDistr
     if (applicationName != null) {
       operation.set("spark.app.name", applicationName);
     }
+  }
+
+  private void commitOperation(
+      SnapshotUpdate<?> operation, String description, WriteSummary summary) {
+    LOG.info("Committing {} to table {}", description, table);
+    setApplicationProperties(operation);
 
     if (!extraSnapshotMetadata.isEmpty()) {
       extraSnapshotMetadata.forEach(operation::set);

@@ -742,8 +742,8 @@ public class ORC {
 
     /**
      * Signals that the configured reader can fill {@code initial-default} values for fields omitted
-     * from an ORC file. Disabled by default so existing readers retain null-synthesizing projection
-     * behavior.
+     * from an ORC file. Disabled by default; a reader that does not opt in fails on an absent field
+     * that declares a non-null {@code initial-default} instead of reading NULL for it.
      */
     public ReadBuilder supportsInitialDefaults() {
       Preconditions.checkState(

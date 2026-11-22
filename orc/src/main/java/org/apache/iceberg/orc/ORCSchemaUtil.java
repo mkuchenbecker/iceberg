@@ -67,8 +67,9 @@ public final class ORCSchemaUtil {
      * names, because the file carried none of its own — typically a legacy or Hive-migrated file. A
      * field can look absent merely because its name did not match, for example after a rename the
      * name mapping no longer covers, while its data is physically present in the file. Filling a
-     * default here would fabricate values over real data, so absent fields are synthesized as null
-     * columns instead.
+     * default here would fabricate values over real data, so the default is never filled: an absent
+     * field with a non-null default fails the projection, and other absent optional fields are
+     * synthesized as null columns.
      */
     NAME_MAPPED
   }
@@ -345,7 +346,7 @@ public final class ORCSchemaUtil {
   public static TypeDescription buildOrcProjection(
       Schema schema, TypeDescription originalOrcSchema) {
     // Callers that cannot establish ID provenance get the conservative behavior: never omit for
-    // defaults, matching this method's behavior before defaults were supported.
+    // defaults, so an absent field with a non-null initial default fails as on Apache Iceberg.
     return buildOrcProjection(schema, originalOrcSchema, FieldIdSource.NAME_MAPPED, false);
   }
 
@@ -357,8 +358,12 @@ public final class ORCSchemaUtil {
    * declares an {@code initial-default}, is absent from the data file, {@code fieldIdSource} is
    * {@link FieldIdSource#EMBEDDED}, and the configured reader supports initial defaults. An
    * id-binding reader then sees no column for that field and fills the declared default as a
-   * per-file constant. Otherwise the field is synthesized as a null column, preserving the behavior
-   * of readers that have not opted in.
+   * per-file constant.
+   *
+   * <p>Otherwise an absent field with a non-null {@code initial-default} cannot be filled, and this
+   * method throws {@link UnsupportedOperationException} as Apache Iceberg does, rather than
+   * synthesizing a null column that would silently read NULL instead of the default. Absent
+   * optional fields without a default are synthesized as null columns.
    *
    * @param fieldIdSource where the IDs in {@code originalOrcSchema} came from; see {@link
    *     FieldIdSource}
@@ -372,6 +377,7 @@ public final class ORCSchemaUtil {
       boolean supportsInitialDefaults) {
     final Map<Integer, OrcField> icebergToOrc = icebergToOrcMapping("root", originalOrcSchema);
     return buildOrcProjection(
+        schema,
         Integer.MIN_VALUE,
         schema.asStruct(),
         true,
@@ -394,6 +400,7 @@ public final class ORCSchemaUtil {
   }
 
   private static TypeDescription buildOrcProjection(
+      Schema root,
       Integer fieldId,
       Type type,
       boolean isRequired,
@@ -420,6 +427,7 @@ public final class ORCSchemaUtil {
                   .orElseGet(() -> nestedField.name() + "_r" + nestedField.fieldId());
           TypeDescription childType =
               buildOrcProjection(
+                  root,
                   nestedField.fieldId(),
                   nestedField.type(),
                   isRequired && nestedField.isRequired(),
@@ -436,6 +444,7 @@ public final class ORCSchemaUtil {
         Types.ListType list = (Types.ListType) type;
         TypeDescription elementType =
             buildOrcProjection(
+                root,
                 list.elementId(),
                 list.elementType(),
                 isRequired && list.isElementRequired(),
@@ -449,6 +458,7 @@ public final class ORCSchemaUtil {
         Types.MapType map = (Types.MapType) type;
         TypeDescription keyType =
             buildOrcProjection(
+                root,
                 map.keyId(),
                 map.keyType(),
                 isRequired,
@@ -457,6 +467,7 @@ public final class ORCSchemaUtil {
                 mapping);
         TypeDescription valueType =
             buildOrcProjection(
+                root,
                 map.valueId(),
                 map.valueType(),
                 isRequired && map.isValueRequired(),
@@ -489,8 +500,23 @@ public final class ORCSchemaUtil {
             orcType = originalType.clone();
           }
         } else {
-          Preconditions.checkArgument(
-              !isRequired, "Field %s of type %s is required and was not found.", fieldId, type);
+          // Reaching here means the field was not omitted for a default-aware reader, so its
+          // initial default cannot be filled. Fail as Apache Iceberg does instead of reading NULL.
+          Types.NestedField field = root.findField(fieldId);
+          if (isRequired) {
+            Preconditions.checkArgument(
+                field.initialDefault() != null,
+                "Missing required field: %s (%s)",
+                root.findColumnName(fieldId),
+                type);
+          }
+
+          if (field.initialDefault() != null) {
+            throw new UnsupportedOperationException(
+                String.format(
+                    "ORC cannot read default value for field %s (%s): %s",
+                    root.findColumnName(fieldId), type, field.initialDefault()));
+          }
 
           orcType = convert(fieldId, type, false);
         }
@@ -611,7 +637,8 @@ public final class ORCSchemaUtil {
    * right test for choosing ID-based resolution over a name mapping. It is not sufficient for
    * omitting a defaulted field: in a partially annotated file an unannotated physical column is
    * indistinguishable from an absent one, so omitting it would replace real data with the default.
-   * Requiring complete annotation keeps such files on the prior null-synthesizing path.
+   * Requiring complete annotation keeps such files off the omit-and-fill path; an absent field with
+   * a non-null default in such a file fails the projection instead.
    *
    * <p>The file's outermost struct is not itself annotated, so only its descendants are checked.
    * The metadata and value children of a variant are not Iceberg columns and carry no ID, so a

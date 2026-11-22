@@ -20,6 +20,7 @@ package org.apache.iceberg.spark.data;
 
 import static org.apache.iceberg.spark.data.TestHelpers.assertEquals;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.File;
 import java.io.IOException;
@@ -141,6 +142,7 @@ public class TestSparkOrcReaderForFieldsWithDefaultValue {
   public void testPartialEmbeddedIdsDoNotFillDefault() throws IOException {
     // A file with some iceberg.id attributes takes the EMBEDDED path, but hasAllIds is false, so
     // an unannotated physical column must not be treated as absent and filled with the default.
+    // The reader cannot tell, so it fails as Apache Iceberg does instead of returning NULL.
     TypeDescription orcSchema = TypeDescription.fromString("struct<col1:int,col2:string>");
     orcSchema.getChildren().get(0).setAttribute("iceberg.id", "1");
 
@@ -161,18 +163,17 @@ public class TestSparkOrcReaderForFieldsWithDefaultValue {
             .createReaderFunc(readOrcSchema -> new SparkOrcReader(readSchema, readOrcSchema))
             .supportsInitialDefaults()
             .build()) {
-      InternalRow row = reader.iterator().next();
-      assertThat(row.getInt(0)).isEqualTo(1);
-      assertThat(row.isNullAt(1))
-          .as("unannotated physical column must not be replaced by the default")
-          .isTrue();
+      assertThatThrownBy(reader::iterator)
+          .isInstanceOf(UnsupportedOperationException.class)
+          .hasMessage("ORC cannot read default value for field col2 (string): foo");
     }
   }
 
   @Test
   public void testNoEmbeddedIdsDoNotFillDefault() throws IOException {
     // A file without any iceberg.id attributes is resolved through a name mapping. An unmatched
-    // name does not prove the column was never written, so the default is not filled.
+    // name does not prove the column was never written, so the default is not filled; the read
+    // fails as Apache Iceberg does instead of returning NULL.
     TypeDescription orcSchema = TypeDescription.fromString("struct<col1:int>");
 
     Schema readSchema =
@@ -192,9 +193,65 @@ public class TestSparkOrcReaderForFieldsWithDefaultValue {
             .createReaderFunc(readOrcSchema -> new SparkOrcReader(readSchema, readOrcSchema))
             .supportsInitialDefaults()
             .build()) {
+      assertThatThrownBy(reader::iterator)
+          .isInstanceOf(UnsupportedOperationException.class)
+          .hasMessage("ORC cannot read default value for field col2 (string): foo");
+    }
+  }
+
+  @Test
+  public void testNoEmbeddedIdsReadsNameMappedColumnThatHasDefault() throws IOException {
+    // A name-mapped file that has the defaulted column physically reads the stored value.
+    TypeDescription orcSchema = TypeDescription.fromString("struct<col1:int,col2:string>");
+
+    Schema readSchema =
+        new Schema(
+            Types.NestedField.required(1, "col1", Types.IntegerType.get()),
+            Types.NestedField.optional("col2")
+                .withId(2)
+                .ofType(Types.StringType.get())
+                .withInitialDefault(Expressions.lit("foo"))
+                .build());
+
+    File orcFile = writeOrcWithIntAndString(orcSchema, 1, "CA");
+
+    try (CloseableIterable<InternalRow> reader =
+        ORC.read(Files.localInput(orcFile))
+            .project(readSchema)
+            .createReaderFunc(readOrcSchema -> new SparkOrcReader(readSchema, readOrcSchema))
+            .supportsInitialDefaults()
+            .build()) {
       InternalRow row = reader.iterator().next();
-      assertThat(row.getInt(0)).isEqualTo(0);
-      assertThat(row.isNullAt(1)).isTrue();
+      assertThat(row.getInt(0)).isEqualTo(1);
+      assertThat(row.getUTF8String(1).toString()).isEqualTo("CA");
+    }
+  }
+
+  @Test
+  public void testReaderWithoutOptInFailsForAbsentDefaultedField() throws IOException {
+    // A Spark ORC reader that does not opt in cannot fill the default, so the read fails.
+    Schema writeSchema = new Schema(Types.NestedField.required(1, "col1", Types.IntegerType.get()));
+    TypeDescription orcSchema = ORCSchemaUtil.convert(writeSchema);
+
+    Schema readSchema =
+        new Schema(
+            Types.NestedField.required(1, "col1", Types.IntegerType.get()),
+            Types.NestedField.optional("col2")
+                .withId(2)
+                .ofType(Types.StringType.get())
+                .withInitialDefault(Expressions.lit("foo"))
+                .build());
+
+    File orcFile = writeOrcWithIntColumn(orcSchema, 1);
+
+    try (CloseableIterable<InternalRow> reader =
+        ORC.read(Files.localInput(orcFile))
+            .project(readSchema)
+            .createReaderFunc(readOrcSchema -> new SparkOrcReader(readSchema, readOrcSchema))
+            .build()) {
+      assertThatThrownBy(reader::iterator)
+          .isInstanceOf(UnsupportedOperationException.class)
+          .hasMessage("ORC cannot read default value for field col2 (string): foo");
     }
   }
 

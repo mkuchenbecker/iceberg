@@ -100,7 +100,8 @@ class OrcIterable<T> extends CloseableGroup implements CloseableIterable<T> {
         nameMapping = MappingUtil.create(schema);
       }
       TypeDescription typeWithIds = ORCSchemaUtil.applyNameMapping(fileSchema, nameMapping);
-      // Name-mapped IDs cannot prove a column was never written, so never omit for defaults.
+      // Name-mapped IDs cannot prove a column was never written, so never omit for defaults; an
+      // absent field with a non-null default then fails the projection instead of reading NULL.
       readOrcSchema =
           ORCSchemaUtil.buildOrcProjection(
               schema, typeWithIds, ORCSchemaUtil.FieldIdSource.NAME_MAPPED, false);

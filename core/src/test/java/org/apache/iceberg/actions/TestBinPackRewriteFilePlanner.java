@@ -661,35 +661,39 @@ class TestBinPackRewriteFilePlanner {
 
   @Test
   void testMaxTotalFilesSizeBytesSelectsOldestFilesFirst() {
-    DataFile d = newDataFile("data_bucket=2", 50);
-    DataFile b = newDataFile("data_bucket=1", 11);
-    DataFile c = newDataFile("data_bucket=1", 11);
-    DataFile a = newDataFile("data_bucket=0", 10);
-    DataFile e = newDataFile("data_bucket=0", 10);
-    addFilesInSeparateCommits(d, b, c, a, e);
+    DataFile fileD = newDataFile("data_bucket=2", 50);
+    DataFile fileB = newDataFile("data_bucket=1", 11);
+    DataFile fileC = newDataFile("data_bucket=1", 11);
+    DataFile fileA = newDataFile("data_bucket=0", 10);
+    DataFile fileE = newDataFile("data_bucket=0", 10);
+    addFilesInSeparateCommits(fileD, fileB, fileC, fileA, fileE);
 
     // all files within the budget
     assertThat(
             selectedFiles(
                 RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, String.valueOf(50 + 11 + 11 + 20)))
         .containsExactlyInAnyOrder(
-            d.location(), b.location(), c.location(), a.location(), e.location());
+            fileD.location(),
+            fileB.location(),
+            fileC.location(),
+            fileA.location(),
+            fileE.location());
 
     // the budget is exactly the size of the 3 oldest files: they are all included
     assertThat(
             selectedFiles(
                 RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, String.valueOf(50 + 11 + 11)))
-        .containsExactlyInAnyOrder(d.location(), b.location(), c.location());
+        .containsExactlyInAnyOrder(fileD.location(), fileB.location(), fileC.location());
 
     // one byte less: the file crossing the budget is excluded
     assertThat(
             selectedFiles(
                 RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, String.valueOf(50 + 11 + 10)))
-        .containsExactlyInAnyOrder(d.location(), b.location());
+        .containsExactlyInAnyOrder(fileD.location(), fileB.location());
 
     // exactly the first file
     assertThat(selectedFiles(RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, "50"))
-        .containsExactly(d.location());
+        .containsExactly(fileD.location());
 
     // the very first file does not fit: nothing is selected
     assertThat(selectedFiles(RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, "49")).isEmpty();
@@ -697,30 +701,30 @@ class TestBinPackRewriteFilePlanner {
 
   @Test
   void testMaxTotalFilesSizeBytesSelectsNewestFilesFirst() {
-    DataFile d = newDataFile("data_bucket=2", 50);
-    DataFile b = newDataFile("data_bucket=1", 11);
-    DataFile c = newDataFile("data_bucket=1", 11);
-    DataFile a = newDataFile("data_bucket=0", 10);
-    DataFile e = newDataFile("data_bucket=0", 12);
-    addFilesInSeparateCommits(d, b, c, a, e);
+    DataFile fileD = newDataFile("data_bucket=2", 50);
+    DataFile fileB = newDataFile("data_bucket=1", 11);
+    DataFile fileC = newDataFile("data_bucket=1", 11);
+    DataFile fileA = newDataFile("data_bucket=0", 10);
+    DataFile fileE = newDataFile("data_bucket=0", 12);
+    addFilesInSeparateCommits(fileD, fileB, fileC, fileA, fileE);
 
     // newest first: e (12), a (10), c (11), b (11), d (50)
     assertThat(selectedFiles(RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_DESC, "33"))
-        .containsExactlyInAnyOrder(e.location(), a.location(), c.location());
+        .containsExactlyInAnyOrder(fileE.location(), fileA.location(), fileC.location());
     assertThat(selectedFiles(RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_DESC, "32"))
-        .containsExactlyInAnyOrder(e.location(), a.location());
+        .containsExactlyInAnyOrder(fileE.location(), fileA.location());
   }
 
   @Test
   void testMaxTotalFilesSizeBytesStopsAtFirstFileThatDoesNotFit() {
-    DataFile x = newDataFile("data_bucket=0", 10);
-    DataFile y = newDataFile("data_bucket=0", 100);
-    DataFile z = newDataFile("data_bucket=0", 10);
-    addFilesInSeparateCommits(x, y, z);
+    DataFile fileX = newDataFile("data_bucket=0", 10);
+    DataFile fileY = newDataFile("data_bucket=0", 100);
+    DataFile fileZ = newDataFile("data_bucket=0", 10);
+    addFilesInSeparateCommits(fileX, fileY, fileZ);
 
     // z would fit into the remaining budget, but selection stops at y
     assertThat(selectedFiles(RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC, "30"))
-        .containsExactly(x.location());
+        .containsExactly(fileX.location());
   }
 
   @Test
@@ -802,7 +806,8 @@ class TestBinPackRewriteFilePlanner {
     planner.init(ImmutableMap.of(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, "-5"));
     assertThatThrownBy(
             () -> planner.init(ImmutableMap.of(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, "abc")))
-        .isInstanceOf(NumberFormatException.class);
+        .isInstanceOf(NumberFormatException.class)
+        .hasMessageContaining("abc");
   }
 
   @Test

@@ -140,11 +140,20 @@ class SparkWriteBuilder implements WriteBuilder, SupportsDynamicOverwrite, Suppo
         validateOrMergeWriteSchema(table, sparkWriteSchema, writeConf, writeRequiresRowLineage);
     SparkUtil.validatePartitionTransforms(table.spec());
 
-    // Get application id
+    // Get application id and name
     String appId = spark.sparkContext().applicationId();
+    String appName = spark.sparkContext().appName();
 
     return new SparkWrite(
-        spark, table, writeConf, writeInfo, appId, writeSchema, dsSchema, writeRequirements()) {
+        spark,
+        table,
+        writeConf,
+        writeInfo,
+        appId,
+        appName,
+        writeSchema,
+        dsSchema,
+        writeRequirements()) {
 
       @Override
       public BatchWrite toBatch() {

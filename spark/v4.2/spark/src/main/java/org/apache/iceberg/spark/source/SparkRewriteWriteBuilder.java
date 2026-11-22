@@ -61,6 +61,7 @@ class SparkRewriteWriteBuilder implements WriteBuilder {
     Schema writeSchema = validateWriteSchema();
     SparkUtil.validatePartitionTransforms(table.spec());
     String appId = spark.sparkContext().applicationId();
+    String appName = spark.sparkContext().appName();
     return new SparkWrite(
         spark,
         table,
@@ -68,6 +69,7 @@ class SparkRewriteWriteBuilder implements WriteBuilder {
         writeConf,
         info,
         appId,
+        appName,
         writeSchema,
         info.schema(),
         writeConf.writeRequirements()) {

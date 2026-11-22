@@ -273,6 +273,7 @@ public class SparkTable extends BaseSparkTable
         table()
             .newDelete()
             .set("spark.app.id", spark().sparkContext().applicationId())
+            .set("spark.app.name", spark().sparkContext().appName())
             .deleteFromRowFilter(deleteExpr);
 
     String writeBranch =

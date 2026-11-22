@@ -118,6 +118,7 @@ class SparkPositionDeltaWrite extends BaseSparkWrite
   private final SparkBatchQueryScan scan;
   private final IsolationLevel isolationLevel;
   private final String applicationId;
+  private final String applicationName;
   private final boolean wapEnabled;
   private final String wapId;
   private final Map<String, String> extraSnapshotMetadata;
@@ -146,6 +147,7 @@ class SparkPositionDeltaWrite extends BaseSparkWrite
     this.scan = scan;
     this.isolationLevel = isolationLevel;
     this.applicationId = spark.sparkContext().applicationId();
+    this.applicationName = spark.sparkContext().appName();
     this.wapEnabled = writeConf.wapEnabled();
     this.wapId = writeConf.wapId();
     this.extraSnapshotMetadata = writeConf.extraSnapshotMetadata();
@@ -346,6 +348,10 @@ class SparkPositionDeltaWrite extends BaseSparkWrite
       LOG.info("Committing {} to table {}", description, table);
       if (applicationId != null) {
         operation.set("spark.app.id", applicationId);
+      }
+
+      if (applicationName != null) {
+        operation.set("spark.app.name", applicationName);
       }
 
       extraSnapshotMetadata.forEach(operation::set);

@@ -126,6 +126,7 @@ class SparkPositionDeltaWrite extends BaseSparkWrite
   private final int sortOrderId;
   private final Context context;
   private final Map<String, String> writeProperties;
+  private final short deleteFileReplication;
 
   private boolean cleanupOnAbort = false;
   private InMemoryMetricsReporter metricsReporter;
@@ -153,6 +154,7 @@ class SparkPositionDeltaWrite extends BaseSparkWrite
     this.extraSnapshotMetadata = writeConf.extraSnapshotMetadata();
     this.writeRequirements = writeConf.positionDeltaRequirements(command);
     this.sortOrderId = writeConf.outputSortOrderId(writeRequirements);
+    this.deleteFileReplication = writeConf.deleteFileReplication();
     this.context = new Context(dataSchema, writeConf, info, writeRequirements);
     this.writeProperties = writeConf.writeProperties();
 
@@ -214,6 +216,7 @@ class SparkPositionDeltaWrite extends BaseSparkWrite
           command,
           context,
           writeProperties,
+          deleteFileReplication,
           sortOrderId);
     }
 
@@ -434,6 +437,7 @@ class SparkPositionDeltaWrite extends BaseSparkWrite
     private final Command command;
     private final Context context;
     private final Map<String, String> writeProperties;
+    private final short deleteFileReplication;
     private final int sortOrderId;
 
     PositionDeltaWriteFactory(
@@ -442,12 +446,14 @@ class SparkPositionDeltaWrite extends BaseSparkWrite
         Command command,
         Context context,
         Map<String, String> writeProperties,
+        short deleteFileReplication,
         int sortOrderId) {
       this.tableBroadcast = tableBroadcast;
       this.rewritableDeletesBroadcast = rewritableDeletesBroadcast;
       this.command = command;
       this.context = context;
       this.writeProperties = writeProperties;
+      this.deleteFileReplication = deleteFileReplication;
       this.sortOrderId = sortOrderId;
     }
 
@@ -465,6 +471,7 @@ class SparkPositionDeltaWrite extends BaseSparkWrite
               .format(context.deleteFileFormat())
               .operationId(context.queryId())
               .suffix("deletes")
+              .replicationFactor(deleteFileReplication)
               .build();
 
       SparkFileWriterFactory writerFactory =

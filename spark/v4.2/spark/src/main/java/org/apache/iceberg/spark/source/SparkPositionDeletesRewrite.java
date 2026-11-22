@@ -83,6 +83,7 @@ public class SparkPositionDeletesRewrite implements Write {
   private final FileFormat format;
   private final long targetFileSize;
   private final DeleteGranularity deleteGranularity;
+  private final short deleteFileReplication;
   private final Schema writeSchema;
   private final StructType dsSchema;
   private final int specId;
@@ -117,6 +118,7 @@ public class SparkPositionDeletesRewrite implements Write {
     this.table = table;
     this.fileSetId = fileSetId;
     this.queryId = writeInfo.queryId();
+    this.deleteFileReplication = writeConf.deleteFileReplication();
     this.format = writeConf.deleteFileFormat();
     this.targetFileSize = writeConf.targetDeleteFileSize();
     this.deleteGranularity = writeConf.deleteGranularity();
@@ -165,7 +167,8 @@ public class SparkPositionDeletesRewrite implements Write {
           dsSchema,
           specId,
           partition,
-          writeProperties);
+          writeProperties,
+          deleteFileReplication);
     }
 
     @Override
@@ -217,6 +220,7 @@ public class SparkPositionDeletesRewrite implements Write {
     private final int specId;
     private final StructLike partition;
     private final Map<String, String> writeProperties;
+    private final short deleteFileReplication;
 
     PositionDeletesWriterFactory(
         Broadcast<Table> tableBroadcast,
@@ -228,7 +232,8 @@ public class SparkPositionDeletesRewrite implements Write {
         StructType dsSchema,
         int specId,
         StructLike partition,
-        Map<String, String> writeProperties) {
+        Map<String, String> writeProperties,
+        short deleteFileReplication) {
       this.tableBroadcast = tableBroadcast;
       this.queryId = queryId;
       this.format = format;
@@ -239,6 +244,7 @@ public class SparkPositionDeletesRewrite implements Write {
       this.specId = specId;
       this.partition = partition;
       this.writeProperties = writeProperties;
+      this.deleteFileReplication = deleteFileReplication;
     }
 
     @Override
@@ -251,6 +257,7 @@ public class SparkPositionDeletesRewrite implements Write {
               .format(formatVersion >= 3 ? FileFormat.PUFFIN : format)
               .operationId(queryId)
               .suffix("deletes")
+              .replicationFactor(deleteFileReplication)
               .build();
 
       if (formatVersion >= 3) {

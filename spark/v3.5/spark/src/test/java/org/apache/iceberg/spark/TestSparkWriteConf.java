@@ -200,6 +200,10 @@ public class TestSparkWriteConf extends TestBaseWithCatalog {
   public void testAdvisoryPartitionSize() {
     Table table = validationCatalog.loadTable(tableIdent);
 
+    // An advisory partition size is only reported when a distribution is requested, and the
+    // default for partitioned tables is NONE, so explicitly request HASH.
+    table.updateProperties().set(WRITE_DISTRIBUTION_MODE, WRITE_DISTRIBUTION_MODE_HASH).commit();
+
     SparkWriteConf writeConf = new SparkWriteConf(spark, table, ImmutableMap.of());
 
     long value1 = writeConf.writeRequirements().advisoryPartitionSize();
@@ -220,7 +224,15 @@ public class TestSparkWriteConf extends TestBaseWithCatalog {
 
     SparkWriteConf writeConf = new SparkWriteConf(spark, table, ImmutableMap.of());
 
-    checkMode(DistributionMode.HASH, writeConf);
+    // normal writes to a partitioned (unsorted) table default to NONE; row-level operations
+    // (DELETE/UPDATE/MERGE) keep their HASH default
+    assertThat(writeConf.distributionMode()).isEqualTo(DistributionMode.NONE);
+    assertThat(writeConf.copyOnWriteDistributionMode(DELETE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.positionDeltaDistributionMode(DELETE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.copyOnWriteDistributionMode(UPDATE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.positionDeltaDistributionMode(UPDATE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.copyOnWriteDistributionMode(MERGE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.positionDeltaDistributionMode(MERGE)).isEqualTo(DistributionMode.HASH);
   }
 
   @TestTemplate

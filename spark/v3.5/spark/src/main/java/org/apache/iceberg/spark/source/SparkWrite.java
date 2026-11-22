@@ -92,6 +92,7 @@ abstract class SparkWrite implements Write, RequiresDistributionAndOrdering {
   private final String queryId;
   private final FileFormat format;
   private final String applicationId;
+  private final String applicationName;
   private final boolean wapEnabled;
   private final String wapId;
   private final int outputSpecId;
@@ -113,6 +114,7 @@ abstract class SparkWrite implements Write, RequiresDistributionAndOrdering {
       SparkWriteConf writeConf,
       LogicalWriteInfo writeInfo,
       String applicationId,
+      String applicationName,
       Schema writeSchema,
       StructType dsSchema,
       SparkWriteRequirements writeRequirements) {
@@ -122,6 +124,7 @@ abstract class SparkWrite implements Write, RequiresDistributionAndOrdering {
     this.queryId = writeInfo.queryId();
     this.format = writeConf.dataFileFormat();
     this.applicationId = applicationId;
+    this.applicationName = applicationName;
     this.wapEnabled = writeConf.wapEnabled();
     this.wapId = writeConf.wapId();
     this.branch = writeConf.branch();
@@ -213,6 +216,10 @@ abstract class SparkWrite implements Write, RequiresDistributionAndOrdering {
     LOG.info("Committing {} to table {}", description, table);
     if (applicationId != null) {
       operation.set("spark.app.id", applicationId);
+    }
+
+    if (applicationName != null) {
+      operation.set("spark.app.name", applicationName);
     }
 
     if (!extraSnapshotMetadata.isEmpty()) {

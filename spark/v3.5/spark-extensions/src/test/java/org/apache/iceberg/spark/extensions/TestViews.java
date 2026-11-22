@@ -58,6 +58,8 @@ import org.apache.spark.sql.Dataset;
 import org.apache.spark.sql.Row;
 import org.apache.spark.sql.catalyst.analysis.NoSuchTableException;
 import org.apache.spark.sql.catalyst.catalog.SessionCatalog;
+import org.apache.spark.sql.catalyst.parser.ParseException;
+import org.apache.spark.sql.catalyst.plans.logical.views.CreateIcebergView;
 import org.apache.spark.sql.types.DataTypes;
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.AfterEach;
@@ -116,6 +118,25 @@ public class TestViews extends ExtensionsTestBase {
         SparkCatalogConfig.SPARK_WITH_HIVE_VIEWS.properties()
       },
     };
+  }
+
+  @TestTemplate
+  public void viewCommandsAreRewrittenByDefaultButNotWhenDisabled() throws ParseException {
+    String confName = "spark.sql.iceberg.rewriteViewCommands.enabled";
+    String createViewSql =
+        String.format("CREATE VIEW %s AS SELECT id FROM %s", viewName("rewriteView"), tableName);
+
+    // rewriting of view commands is enabled by default
+    assertThat(spark.sessionState().sqlParser().parsePlan(createViewSql))
+        .isInstanceOf(CreateIcebergView.class);
+
+    spark.conf().set(confName, "false");
+    try {
+      assertThat(spark.sessionState().sqlParser().parsePlan(createViewSql))
+          .isNotInstanceOf(CreateIcebergView.class);
+    } finally {
+      spark.conf().unset(confName);
+    }
   }
 
   @TestTemplate

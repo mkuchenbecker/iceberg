@@ -97,6 +97,22 @@ public class TestMergeOnReadDelete extends TestDelete {
   }
 
   @TestTemplate
+  public void testDeleteSnapshotSummaryContainsSparkApplicationName() throws NoSuchTableException {
+    createAndInitPartitionedTable();
+
+    append(tableName, new Employee(1, "hr"), new Employee(2, "hr"));
+    createBranchIfNeeded();
+
+    sql("DELETE FROM %s WHERE id = 1", commitTarget());
+
+    Table table = validationCatalog.loadTable(tableIdent);
+    Snapshot snapshot = SnapshotUtil.latestSnapshot(table, branch);
+    assertThat(snapshot.summary())
+        .containsEntry("spark.app.id", spark.sparkContext().applicationId())
+        .containsEntry("spark.app.name", spark.sparkContext().appName());
+  }
+
+  @TestTemplate
   public void testDeleteFileGranularity() throws NoSuchTableException {
     assumeThat(formatVersion).isEqualTo(2);
     checkDeleteFileGranularity(DeleteGranularity.FILE);

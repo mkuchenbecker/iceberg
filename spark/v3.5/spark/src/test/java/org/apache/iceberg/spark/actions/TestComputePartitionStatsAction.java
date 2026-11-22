@@ -255,15 +255,18 @@ public class TestComputePartitionStatsAction extends CatalogTestBase {
             .get(0)[0];
   }
 
+  // This fork defaults partitioned writes to NONE distribution, which writes one data file per
+  // write task instead of one per partition. These tests assert exact data file counts per
+  // partition, so the tables request HASH distribution explicitly to keep the counts deterministic.
   private void createPartitionedTable() {
     sql(
-        "CREATE TABLE %s (c1 int, c2 string, c3 string) USING iceberg PARTITIONED BY (c2, c3) TBLPROPERTIES('write.delete.mode'='merge-on-read')",
+        "CREATE TABLE %s (c1 int, c2 string, c3 string) USING iceberg PARTITIONED BY (c2, c3) TBLPROPERTIES('write.delete.mode'='merge-on-read', 'write.distribution-mode'='hash')",
         tableName);
   }
 
   private void createPartitionedTableV1() {
     sql(
-        "CREATE TABLE %s (c1 int, c2 string, c3 string) USING iceberg PARTITIONED BY (c2, c3) TBLPROPERTIES('format-version'='1')",
+        "CREATE TABLE %s (c1 int, c2 string, c3 string) USING iceberg PARTITIONED BY (c2, c3) TBLPROPERTIES('format-version'='1', 'write.distribution-mode'='hash')",
         tableName);
   }
 

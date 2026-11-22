@@ -209,7 +209,8 @@ public class TestBuildOrcProjection {
                 .build());
 
     TypeDescription projection =
-        ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema, true);
+        ORCSchemaUtil.buildOrcProjection(
+            evolvedSchema, baseOrcSchema, ORCSchemaUtil.FieldIdSource.EMBEDDED, true);
     assertThat(projection.getChildren()).hasSize(1);
     assertThat(projection.getFieldNames()).containsExactly("id");
   }
@@ -229,7 +230,8 @@ public class TestBuildOrcProjection {
                 .build());
 
     TypeDescription projection =
-        ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema, false);
+        ORCSchemaUtil.buildOrcProjection(
+            evolvedSchema, baseOrcSchema, ORCSchemaUtil.FieldIdSource.EMBEDDED, false);
     assertThat(projection.getChildren()).hasSize(2);
     assertThat(projection.findSubtype("country_r2").getCategory())
         .isEqualTo(TypeDescription.Category.STRING);
@@ -286,7 +288,10 @@ public class TestBuildOrcProjection {
         new Schema(
             required(1, "id", Types.LongType.get()), required(2, "code", Types.IntegerType.get()));
 
-    assertThatThrownBy(() -> ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema, true))
+    assertThatThrownBy(
+            () ->
+                ORCSchemaUtil.buildOrcProjection(
+                    evolvedSchema, baseOrcSchema, ORCSchemaUtil.FieldIdSource.EMBEDDED, true))
         .isInstanceOf(IllegalArgumentException.class)
         .hasMessage("Field 2 of type int is required and was not found.");
   }
@@ -300,7 +305,8 @@ public class TestBuildOrcProjection {
             required(1, "id", Types.LongType.get()), optional(2, "code", Types.IntegerType.get()));
 
     TypeDescription projection =
-        ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema, true);
+        ORCSchemaUtil.buildOrcProjection(
+            evolvedSchema, baseOrcSchema, ORCSchemaUtil.FieldIdSource.EMBEDDED, true);
     assertThat(projection.getChildren()).hasSize(2);
     assertThat(projection.findSubtype("code_r2").getCategory())
         .isEqualTo(TypeDescription.Category.INT);
@@ -323,7 +329,8 @@ public class TestBuildOrcProjection {
                 .build());
 
     TypeDescription projection =
-        ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema, true);
+        ORCSchemaUtil.buildOrcProjection(
+            evolvedSchema, baseOrcSchema, ORCSchemaUtil.FieldIdSource.EMBEDDED, true);
     assertThat(projection.getFieldNames()).containsExactly("id");
   }
 
@@ -350,7 +357,8 @@ public class TestBuildOrcProjection {
                         .build())));
 
     TypeDescription projection =
-        ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema, true);
+        ORCSchemaUtil.buildOrcProjection(
+            evolvedSchema, baseOrcSchema, ORCSchemaUtil.FieldIdSource.EMBEDDED, true);
     assertThat(projection.findSubtype("s").getFieldNames()).containsExactly("a");
   }
 
@@ -372,7 +380,63 @@ public class TestBuildOrcProjection {
                 .build());
 
     TypeDescription projection =
-        ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema, true);
+        ORCSchemaUtil.buildOrcProjection(
+            evolvedSchema, baseOrcSchema, ORCSchemaUtil.FieldIdSource.EMBEDDED, true);
     assertThat(projection.getFieldNames()).containsExactly("id", "country");
+  }
+
+  @Test
+  public void testSynthesizesNullForTopLevelScalarDefaultWhenIdsAreNameMapped() {
+    Schema baseSchema = new Schema(required(1, "id", Types.LongType.get()));
+    TypeDescription baseOrcSchema = ORCSchemaUtil.convert(baseSchema);
+
+    Schema evolvedSchema =
+        new Schema(
+            required(1, "id", Types.LongType.get()),
+            Types.NestedField.optional("country")
+                .withId(2)
+                .ofType(Types.StringType.get())
+                .withInitialDefault(Expressions.lit("US"))
+                .build());
+
+    // Name-mapped provenance (or the conservative public 2-arg API): an unmatched name does not
+    // prove the column is absent, so synthesize NULL rather than applying the default.
+    TypeDescription projection =
+        ORCSchemaUtil.buildOrcProjection(
+            evolvedSchema, baseOrcSchema, ORCSchemaUtil.FieldIdSource.NAME_MAPPED, true);
+    assertThat(projection.getChildren()).hasSize(2);
+    assertThat(projection.findSubtype("country_r2").getId()).isEqualTo(2);
+    assertThat(projection.findSubtype("country_r2").getCategory())
+        .isEqualTo(TypeDescription.Category.STRING);
+  }
+
+  @Test
+  public void testPreservesNestedStructWhenAllProjectedFieldsAreOmitted() {
+    // Base file: s { a }. Project only a new defaulted subfield s { b default 'x' } (drop a). Every
+    // projected subfield of s is absent + defaulted, so the nested read struct is omitted down to
+    // empty; the reader fills b via idToConstant.
+    Schema baseSchema =
+        new Schema(
+            required(1, "id", Types.LongType.get()),
+            required(2, "s", Types.StructType.of(required(3, "a", Types.LongType.get()))));
+    TypeDescription baseOrcSchema = ORCSchemaUtil.convert(baseSchema);
+
+    Schema evolvedSchema =
+        new Schema(
+            required(1, "id", Types.LongType.get()),
+            optional(
+                2,
+                "s",
+                Types.StructType.of(
+                    Types.NestedField.optional("b")
+                        .withId(4)
+                        .ofType(Types.StringType.get())
+                        .withInitialDefault(Expressions.lit("x"))
+                        .build())));
+
+    TypeDescription projection =
+        ORCSchemaUtil.buildOrcProjection(
+            evolvedSchema, baseOrcSchema, ORCSchemaUtil.FieldIdSource.EMBEDDED, true);
+    assertThat(projection.findSubtype("s").getChildren()).isEmpty();
   }
 }

@@ -368,6 +368,64 @@ public class TestORCSchemaUtil {
   }
 
   @Test
+  public void testHasAllIds() {
+    Schema schema =
+        new Schema(
+            required(1, "id", Types.LongType.get()), optional(2, "data", Types.StringType.get()));
+
+    TypeDescription fullyAnnotated = ORCSchemaUtil.convert(schema);
+    assertThat(ORCSchemaUtil.hasAllIds(fullyAnnotated))
+        .as("Iceberg-written schemas annotate every column")
+        .isTrue();
+
+    TypeDescription noneAnnotated = ORCSchemaUtil.removeIds(fullyAnnotated);
+    assertThat(ORCSchemaUtil.hasAllIds(noneAnnotated))
+        .as("A file with no ids is not fully annotated")
+        .isFalse();
+
+    // hasIds is true if any column is annotated; hasAllIds requires every column.
+    TypeDescription partial = ORCSchemaUtil.convert(schema);
+    TypeDescription extra = TypeDescription.createString();
+    partial.addField("unannotated", extra);
+    assertThat(ORCSchemaUtil.hasIds(partial))
+        .as("One annotated column is enough for hasIds")
+        .isTrue();
+    assertThat(ORCSchemaUtil.hasAllIds(partial))
+        .as("An unannotated sibling must fail hasAllIds")
+        .isFalse();
+  }
+
+  @Test
+  public void testHasAllIdsChecksNestedColumns() {
+    Schema schema =
+        new Schema(
+            required(1, "id", Types.LongType.get()),
+            optional(2, "s", Types.StructType.of(optional(3, "a", Types.StringType.get()))),
+            optional(4, "l", Types.ListType.ofOptional(5, Types.StringType.get())),
+            optional(
+                6,
+                "m",
+                Types.MapType.ofOptional(7, 8, Types.StringType.get(), Types.StringType.get())));
+
+    TypeDescription nested = ORCSchemaUtil.convert(schema);
+    assertThat(ORCSchemaUtil.hasAllIds(nested)).isTrue();
+
+    // an unannotated field nested inside a struct makes the file only partially annotated
+    nested.findSubtype("s").addField("unannotated", TypeDescription.createString());
+    assertThat(ORCSchemaUtil.hasAllIds(nested)).isFalse();
+  }
+
+  @Test
+  public void testHasAllIdsTreatsVariantAsSingleAnnotatedColumn() {
+    // the metadata and value children of a variant are not Iceberg columns and carry no ids
+    Schema schema =
+        new Schema(
+            required(1, "id", Types.LongType.get()), optional(2, "v", Types.VariantType.get()));
+
+    assertThat(ORCSchemaUtil.hasAllIds(ORCSchemaUtil.convert(schema))).isTrue();
+  }
+
+  @Test
   public void testAssignIdsByNameMapping() {
     Types.StructType structType =
         Types.StructType.of(

@@ -20,6 +20,7 @@ package org.apache.iceberg.spark.source;
 
 import static org.apache.iceberg.Files.localInput;
 import static org.apache.iceberg.Files.localOutput;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.tuple;
 
 import java.io.File;
@@ -54,7 +55,6 @@ import org.apache.spark.sql.connector.read.Batch;
 import org.apache.spark.sql.connector.read.InputPartition;
 import org.apache.spark.sql.connector.read.PartitionReaderFactory;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
-import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -137,7 +137,7 @@ public class TestSparkOrcInitialDefaultScan {
                 PartitionSpec.unpartitioned(),
                 TABLE_PROPERTIES,
                 tableLocation.toString());
-    Assertions.assertThat(table.schema().findField("country").initialDefault()).isEqualTo("US");
+    assertThat(table.schema().findField("country").initialDefault()).isEqualTo("US");
 
     Record old = GenericRecord.create(OLD_FILE_SCHEMA);
     old.setField("id", 1L);
@@ -162,7 +162,7 @@ public class TestSparkOrcInitialDefaultScan {
 
   @Test
   public void testDefaultedScansAreRoutedToTheRowReader() {
-    Assertions.assertThat(supportsColumnarReads(TABLE_SCHEMA)).isFalse();
+    assertThat(supportsColumnarReads(TABLE_SCHEMA)).isFalse();
     Schema countryOnly =
         new Schema(
             Types.NestedField.optional("country")
@@ -170,14 +170,14 @@ public class TestSparkOrcInitialDefaultScan {
                 .ofType(Types.StringType.get())
                 .withInitialDefault(Expressions.lit("US"))
                 .build());
-    Assertions.assertThat(supportsColumnarReads(countryOnly)).isFalse();
+    assertThat(supportsColumnarReads(countryOnly)).isFalse();
   }
 
   @Test
   public void testMixedFilesApplyDefaultPerFile() {
     List<Row> rows = read().select("id", "country", "data").orderBy("id").collectAsList();
 
-    Assertions.assertThat(rows)
+    assertThat(rows)
         .extracting(row -> row.getLong(0), row -> row.getString(1), row -> row.getString(2))
         .containsExactly(
             tuple(1L, "US", "old"), tuple(2L, "CA", "new-value"), tuple(3L, null, "new-null"));
@@ -187,16 +187,15 @@ public class TestSparkOrcInitialDefaultScan {
   public void testFilterWhenOnlyOmittedDefaultColumnIsProjected() {
     // Projection+filter on only the defaulted column yields an empty ORC schema for the old file.
     // SARG must disable pushdown so Spark can evaluate the filled default.
-    Assertions.assertThat(
+    assertThat(
             read().select("country").filter("country = 'US'").collectAsList().stream()
                 .map(row -> row.getString(0))
                 .collect(Collectors.toList()))
         .containsExactly("US");
 
-    Assertions.assertThat(read().select("country").filter("country = 'bar'").collectAsList())
-        .isEmpty();
+    assertThat(read().select("country").filter("country = 'bar'").collectAsList()).isEmpty();
 
-    Assertions.assertThat(
+    assertThat(
             read().select("country").filter("country IS NULL").collectAsList().stream()
                 .map(row -> row.getString(0))
                 .collect(Collectors.toList()))
@@ -209,22 +208,22 @@ public class TestSparkOrcInitialDefaultScan {
         read().filter("id = 1 AND country = 'US'").select("id").collectAsList().stream()
             .map(row -> row.getLong(0))
             .collect(Collectors.toList());
-    Assertions.assertThat(ids).containsExactly(1L);
+    assertThat(ids).containsExactly(1L);
 
-    Assertions.assertThat(read().filter("id = 1 AND country = 'CA'").collectAsList()).isEmpty();
+    assertThat(read().filter("id = 1 AND country = 'CA'").collectAsList()).isEmpty();
   }
 
   @Test
   public void testFilterDefaultedColumnAcrossMixedFiles() {
     // Old file reads country as 'US'; new file has 'CA' and an explicit null. SARG is disabled for
     // the omitted column so Spark filters the filled values.
-    Assertions.assertThat(
+    assertThat(
             read().filter("country IS NOT NULL").select("id").orderBy("id").collectAsList().stream()
                 .map(row -> row.getLong(0))
                 .collect(Collectors.toList()))
         .containsExactly(1L, 2L);
 
-    Assertions.assertThat(
+    assertThat(
             read()
                 .filter("upper(country) = 'US'")
                 .select("id")
@@ -235,7 +234,7 @@ public class TestSparkOrcInitialDefaultScan {
                 .collect(Collectors.toList()))
         .containsExactly(1L);
 
-    Assertions.assertThat(
+    assertThat(
             read().filter("country = 'CA'").select("id").collectAsList().stream()
                 .map(row -> row.getLong(0))
                 .collect(Collectors.toList()))
@@ -296,7 +295,7 @@ public class TestSparkOrcInitialDefaultScan {
             .load(nestedLocation.toString());
 
     // Present loc fills country from initial-default; a null parent stays null.
-    Assertions.assertThat(
+    assertThat(
             nestedRead
                 .selectExpr("id", "loc.country as country")
                 .orderBy("id")
@@ -306,19 +305,19 @@ public class TestSparkOrcInitialDefaultScan {
                 .collect(Collectors.toList()))
         .containsExactly(tuple(1L, "US"), tuple(2L, null), tuple(3L, "CA"));
 
-    Assertions.assertThat(
+    assertThat(
             nestedRead.filter("loc.country = 'US'").select("id").collectAsList().stream()
                 .map(row -> row.getLong(0))
                 .collect(Collectors.toList()))
         .containsExactly(1L);
 
-    Assertions.assertThat(
+    assertThat(
             nestedRead.filter("loc.country IS NULL").select("id").collectAsList().stream()
                 .map(row -> row.getLong(0))
                 .collect(Collectors.toList()))
         .containsExactly(2L);
 
-    Assertions.assertThat(
+    assertThat(
             nestedRead.filter("loc.country = 'CA'").select("id").collectAsList().stream()
                 .map(row -> row.getLong(0))
                 .collect(Collectors.toList()))
@@ -353,8 +352,7 @@ public class TestSparkOrcInitialDefaultScan {
   private DataFile writeFile(File location, Schema schema, List<Record> records, String name)
       throws IOException {
     File file = new File(new File(location, "data"), name);
-    Assertions.assertThat(file.getParentFile().mkdirs() || file.getParentFile().isDirectory())
-        .isTrue();
+    assertThat(file.getParentFile().mkdirs() || file.getParentFile().isDirectory()).isTrue();
     FileAppender<Record> appender =
         ORC.write(localOutput(file))
             .schema(schema)

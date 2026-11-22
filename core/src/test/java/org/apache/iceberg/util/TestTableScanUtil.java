@@ -69,6 +69,22 @@ public class TestTableScanUtil {
         .collect(Collectors.toList());
   }
 
+  private List<FileScanTask> parquetTasksWithDataAndDeleteSizes(
+      List<Pair<Long, Long[]>> sizePairs) {
+    return sizePairs.stream()
+        .map(
+            sizePair -> {
+              DataFile dataFile = dataFileWithSize(sizePair.first());
+              Mockito.when(dataFile.format()).thenReturn(FileFormat.PARQUET);
+              Mockito.when(dataFile.splitOffsets()).thenReturn(null);
+              DeleteFile[] deleteFiles =
+                  deleteFilesWithSizes(
+                      Arrays.stream(sizePair.second()).mapToLong(Long::longValue).toArray());
+              return (FileScanTask) new MockFileScanTask(dataFile, deleteFiles);
+            })
+        .collect(Collectors.toList());
+  }
+
   private DataFile dataFileWithSize(long size) {
     DataFile mockFile = Mockito.mock(DataFile.class);
     Mockito.when(mockFile.fileSizeInBytes()).thenReturn(size);
@@ -130,6 +146,79 @@ public class TestTableScanUtil {
           .as("Scan tasks detail in combined task check failed")
           .isEqualTo(expectedCombinedTasks.get(i).files());
     }
+  }
+
+  @Test
+  public void testPlanTaskGroupsWithDataSizeIgnoresDeleteFiles() {
+    // every task has 100 bytes of data and 100 bytes of delete files
+    List<FileScanTask> tasks =
+        parquetTasksWithDataAndDeleteSizes(
+            Arrays.asList(
+                Pair.of(100L, new Long[] {100L}),
+                Pair.of(100L, new Long[] {100L}),
+                Pair.of(100L, new Long[] {100L}),
+                Pair.of(100L, new Long[] {100L})));
+
+    assertThat(TableScanUtil.planTaskGroups(tasks, 200L, 10, 0L))
+        .as("Default planning uses the size of data and delete files, one task per group")
+        .hasSize(4);
+
+    List<ScanTaskGroup<FileScanTask>> groups =
+        TableScanUtil.planTaskGroupsWithDataSize(tasks, 200L, 10, 0L);
+    assertThat(groups).as("Only the size of data files is used as weight").hasSize(2);
+    assertThat(groups.get(0).tasks()).hasSize(2);
+    assertThat(groups.get(1).tasks()).hasSize(2);
+  }
+
+  @Test
+  public void testPlanTaskGroupsWithDataSizeStillAppliesOpenFileCost() {
+    List<FileScanTask> tasks =
+        parquetTasksWithDataAndDeleteSizes(
+            Arrays.asList(
+                Pair.of(10L, new Long[] {500L}),
+                Pair.of(10L, new Long[] {500L}),
+                Pair.of(10L, new Long[] {500L}),
+                Pair.of(10L, new Long[] {500L})));
+
+    // the weight of each task is max(10, 2 files * 100) = 200, a task has the data and delete file
+    assertThat(TableScanUtil.planTaskGroupsWithDataSize(tasks, 400L, 10, 100L)).hasSize(2);
+    assertThat(TableScanUtil.planTaskGroupsWithDataSize(tasks, 399L, 10, 100L)).hasSize(4);
+  }
+
+  @Test
+  public void testPlanTaskGroupsWithDataSizeFallsBackToSizeBytesForOtherTasks() {
+    List<ParentTask> tasks =
+        ImmutableList.of(
+            new ChildTask3(64), new ChildTask3(32), new ChildTask3(32), new ChildTask3(128));
+
+    List<ScanTaskGroup<ParentTask>> expected = TableScanUtil.planTaskGroups(tasks, 128, 10, 4);
+    List<ScanTaskGroup<ParentTask>> actual =
+        TableScanUtil.planTaskGroupsWithDataSize(tasks, 128, 10, 4);
+
+    assertThat(actual).hasSameSizeAs(expected);
+    for (int i = 0; i < expected.size(); i++) {
+      assertThat(actual.get(i).sizeBytes()).isEqualTo(expected.get(i).sizeBytes());
+      assertThat(actual.get(i).tasks()).hasSameSizeAs(expected.get(i).tasks());
+    }
+  }
+
+  @Test
+  public void testPlanTaskGroupsWithWeightFunction() {
+    List<FileScanTask> tasks =
+        parquetTasksWithDataAndDeleteSizes(
+            Arrays.asList(
+                Pair.of(100L, new Long[] {100L}),
+                Pair.of(100L, new Long[] {100L}),
+                Pair.of(100L, new Long[] {100L}),
+                Pair.of(100L, new Long[] {100L}),
+                Pair.of(100L, new Long[] {100L})));
+
+    // each task weighs 100, so 2 tasks fit into a group of size 200
+    List<ScanTaskGroup<FileScanTask>> groups =
+        TableScanUtil.planTaskGroups(tasks, 200L, 10, 0L, task -> 100L);
+    assertThat(groups).hasSize(3);
+    assertThat(groups.stream().mapToInt(group -> group.tasks().size()).boxed())
+        .containsExactly(2, 2, 1);
   }
 
   @Test

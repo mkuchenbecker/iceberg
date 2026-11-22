@@ -86,6 +86,7 @@ public class RewriteDataFilesSparkAction
       ImmutableSet.of(
           MAX_CONCURRENT_FILE_GROUP_REWRITES,
           MAX_FILE_GROUP_SIZE_BYTES,
+          MAX_TOTAL_FILES_SIZE_BYTES,
           PARTIAL_PROGRESS_ENABLED,
           PARTIAL_PROGRESS_MAX_COMMITS,
           PARTIAL_PROGRESS_MAX_FAILED_COMMITS,

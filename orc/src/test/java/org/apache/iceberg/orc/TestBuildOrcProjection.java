@@ -24,6 +24,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import org.apache.iceberg.Schema;
+import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.expressions.Literal;
 import org.apache.iceberg.types.Types;
 import org.apache.orc.TypeDescription;
@@ -191,5 +192,187 @@ public class TestBuildOrcProjection {
     assertThatThrownBy(() -> ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema))
         .isInstanceOf(UnsupportedOperationException.class)
         .hasMessage("ORC cannot read default value for field b.d (long): 34");
+  }
+
+  @Test
+  public void testOmitsTopLevelScalarDefaultWhenReaderSupportsDefaults() {
+    Schema baseSchema = new Schema(required(1, "id", Types.LongType.get()));
+    TypeDescription baseOrcSchema = ORCSchemaUtil.convert(baseSchema);
+
+    Schema evolvedSchema =
+        new Schema(
+            required(1, "id", Types.LongType.get()),
+            Types.NestedField.optional("country")
+                .withId(2)
+                .ofType(Types.StringType.get())
+                .withInitialDefault(Expressions.lit("US"))
+                .build());
+
+    TypeDescription projection =
+        ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema, true);
+    assertThat(projection.getChildren()).hasSize(1);
+    assertThat(projection.getFieldNames()).containsExactly("id");
+  }
+
+  @Test
+  public void testSynthesizesNullForTopLevelScalarDefaultWhenReaderDoesNotSupportDefaults() {
+    Schema baseSchema = new Schema(required(1, "id", Types.LongType.get()));
+    TypeDescription baseOrcSchema = ORCSchemaUtil.convert(baseSchema);
+
+    Schema evolvedSchema =
+        new Schema(
+            required(1, "id", Types.LongType.get()),
+            Types.NestedField.optional("country")
+                .withId(2)
+                .ofType(Types.StringType.get())
+                .withInitialDefault(Expressions.lit("US"))
+                .build());
+
+    TypeDescription projection =
+        ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema, false);
+    assertThat(projection.getChildren()).hasSize(2);
+    assertThat(projection.findSubtype("country_r2").getCategory())
+        .isEqualTo(TypeDescription.Category.STRING);
+  }
+
+  @Test
+  public void testPublicProjectionSynthesizesNullForOptionalFieldWithDefault() {
+    // LinkedIn: the two-argument projection never omits for defaults and does not reject them; the
+    // absent optional field is synthesized as a null column.
+    Schema baseSchema = new Schema(required(1, "id", Types.LongType.get()));
+    TypeDescription baseOrcSchema = ORCSchemaUtil.convert(baseSchema);
+
+    Schema evolvedSchema =
+        new Schema(
+            required(1, "id", Types.LongType.get()),
+            Types.NestedField.optional("country")
+                .withId(2)
+                .ofType(Types.StringType.get())
+                .withInitialDefault(Expressions.lit("US"))
+                .build());
+
+    TypeDescription projection = ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema);
+    assertThat(projection.getChildren()).hasSize(2);
+    assertThat(projection.findSubtype("country_r2").getCategory())
+        .isEqualTo(TypeDescription.Category.STRING);
+  }
+
+  @Test
+  public void testPublicProjectionRejectsRequiredFieldWithDefaultMissingInFile() {
+    // LinkedIn: a required field that is not omitted is rejected as missing even if it has a
+    // default.
+    Schema baseSchema = new Schema(required(1, "id", Types.LongType.get()));
+    TypeDescription baseOrcSchema = ORCSchemaUtil.convert(baseSchema);
+
+    Schema evolvedSchema =
+        new Schema(
+            required(1, "id", Types.LongType.get()),
+            Types.NestedField.required("code")
+                .withId(2)
+                .ofType(Types.IntegerType.get())
+                .withInitialDefault(Expressions.lit(7))
+                .build());
+
+    assertThatThrownBy(() -> ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("Field 2 of type int is required and was not found.");
+  }
+
+  @Test
+  public void testRequiredFieldWithoutDefaultMissingInFileIsRejected() {
+    Schema baseSchema = new Schema(required(1, "id", Types.LongType.get()));
+    TypeDescription baseOrcSchema = ORCSchemaUtil.convert(baseSchema);
+    Schema evolvedSchema =
+        new Schema(
+            required(1, "id", Types.LongType.get()), required(2, "code", Types.IntegerType.get()));
+
+    assertThatThrownBy(() -> ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema, true))
+        .isInstanceOf(IllegalArgumentException.class)
+        .hasMessage("Field 2 of type int is required and was not found.");
+  }
+
+  @Test
+  public void testOptionalFieldWithoutDefaultMissingInFileIsSynthesizedAsNull() {
+    Schema baseSchema = new Schema(required(1, "id", Types.LongType.get()));
+    TypeDescription baseOrcSchema = ORCSchemaUtil.convert(baseSchema);
+    Schema evolvedSchema =
+        new Schema(
+            required(1, "id", Types.LongType.get()), optional(2, "code", Types.IntegerType.get()));
+
+    TypeDescription projection =
+        ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema, true);
+    assertThat(projection.getChildren()).hasSize(2);
+    assertThat(projection.findSubtype("code_r2").getCategory())
+        .isEqualTo(TypeDescription.Category.INT);
+  }
+
+  @Test
+  public void testOmitsRequiredTopLevelScalarDefaultWhenReaderSupportsDefaults() {
+    Schema baseSchema = new Schema(required(1, "id", Types.LongType.get()));
+    TypeDescription baseOrcSchema = ORCSchemaUtil.convert(baseSchema);
+
+    // A required field that is absent from the file but declares a default is omitted (then
+    // filled), not rejected by the required-missing check.
+    Schema evolvedSchema =
+        new Schema(
+            required(1, "id", Types.LongType.get()),
+            Types.NestedField.required("code")
+                .withId(2)
+                .ofType(Types.IntegerType.get())
+                .withInitialDefault(Expressions.lit(7))
+                .build());
+
+    TypeDescription projection =
+        ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema, true);
+    assertThat(projection.getFieldNames()).containsExactly("id");
+  }
+
+  @Test
+  public void testOmitsNestedScalarDefaultWhenReaderSupportsDefaults() {
+    Schema baseSchema =
+        new Schema(
+            required(1, "id", Types.LongType.get()),
+            required(2, "s", Types.StructType.of(required(3, "a", Types.LongType.get()))));
+    TypeDescription baseOrcSchema = ORCSchemaUtil.convert(baseSchema);
+
+    Schema evolvedSchema =
+        new Schema(
+            required(1, "id", Types.LongType.get()),
+            required(
+                2,
+                "s",
+                Types.StructType.of(
+                    required(3, "a", Types.LongType.get()),
+                    Types.NestedField.optional("b")
+                        .withId(4)
+                        .ofType(Types.StringType.get())
+                        .withInitialDefault(Expressions.lit("x"))
+                        .build())));
+
+    TypeDescription projection =
+        ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema, true);
+    assertThat(projection.findSubtype("s").getFieldNames()).containsExactly("a");
+  }
+
+  @Test
+  public void testDoesNotOmitDefaultWhenFieldIsPresentInFile() {
+    Schema baseSchema =
+        new Schema(
+            required(1, "id", Types.LongType.get()),
+            optional(2, "country", Types.StringType.get()));
+    TypeDescription baseOrcSchema = ORCSchemaUtil.convert(baseSchema);
+
+    Schema evolvedSchema =
+        new Schema(
+            required(1, "id", Types.LongType.get()),
+            Types.NestedField.optional("country")
+                .withId(2)
+                .ofType(Types.StringType.get())
+                .withInitialDefault(Expressions.lit("US"))
+                .build());
+
+    TypeDescription projection =
+        ORCSchemaUtil.buildOrcProjection(evolvedSchema, baseOrcSchema, true);
+    assertThat(projection.getFieldNames()).containsExactly("id", "country");
   }
 }

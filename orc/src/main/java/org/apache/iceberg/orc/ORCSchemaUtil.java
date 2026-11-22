@@ -318,18 +318,41 @@ public final class ORCSchemaUtil {
    */
   public static TypeDescription buildOrcProjection(
       Schema schema, TypeDescription originalOrcSchema) {
+    return buildOrcProjection(schema, originalOrcSchema, false);
+  }
+
+  /**
+   * Builds the ORC read projection, optionally omitting absent fields that declare an {@code
+   * initial-default} so a default-aware reader can fill them via {@code idToConstant}.
+   *
+   * <p>When {@code supportsInitialDefaults} is true and a field is absent from the file but
+   * declares {@code initialDefault()}, it is omitted instead of being synthesized as a null column.
+   */
+  static TypeDescription buildOrcProjection(
+      Schema schema, TypeDescription originalOrcSchema, boolean supportsInitialDefaults) {
     final Map<Integer, OrcField> icebergToOrc = icebergToOrcMapping("root", originalOrcSchema);
-    return buildOrcProjection(schema, Integer.MIN_VALUE, schema.asStruct(), true, icebergToOrc);
+    return buildOrcProjection(
+        Integer.MIN_VALUE, schema.asStruct(), true, supportsInitialDefaults, icebergToOrc);
   }
 
   private static TypeDescription buildOrcProjection(
-      Schema root, Integer fieldId, Type type, boolean isRequired, Map<Integer, OrcField> mapping) {
+      Integer fieldId,
+      Type type,
+      boolean isRequired,
+      boolean supportsInitialDefaults,
+      Map<Integer, OrcField> mapping) {
     final TypeDescription orcType;
 
     switch (type.typeId()) {
       case STRUCT:
         orcType = TypeDescription.createStruct();
         for (Types.NestedField nestedField : type.asStructType().fields()) {
+          // Omit so the reader fills via idToConstant instead of a synthetic null column.
+          if (supportsInitialDefaults
+              && mapping.get(nestedField.fieldId()) == null
+              && nestedField.initialDefault() != null) {
+            continue;
+          }
           // Using suffix _r to avoid potential underlying issues in ORC reader
           // with reused column names between ORC and Iceberg;
           // e.g. renaming column c -> d and adding new column d
@@ -339,10 +362,10 @@ public final class ORCSchemaUtil {
                   .orElseGet(() -> nestedField.name() + "_r" + nestedField.fieldId());
           TypeDescription childType =
               buildOrcProjection(
-                  root,
                   nestedField.fieldId(),
                   nestedField.type(),
                   isRequired && nestedField.isRequired(),
+                  supportsInitialDefaults,
                   mapping);
 
           if (childType != null) {
@@ -354,10 +377,10 @@ public final class ORCSchemaUtil {
         Types.ListType list = (Types.ListType) type;
         TypeDescription elementType =
             buildOrcProjection(
-                root,
                 list.elementId(),
                 list.elementType(),
                 isRequired && list.isElementRequired(),
+                supportsInitialDefaults,
                 mapping);
         Preconditions.checkArgument(elementType != null, "Invalid element type: unknown");
         orcType = TypeDescription.createList(elementType);
@@ -365,10 +388,15 @@ public final class ORCSchemaUtil {
       case MAP:
         Types.MapType map = (Types.MapType) type;
         TypeDescription keyType =
-            buildOrcProjection(root, map.keyId(), map.keyType(), isRequired, mapping);
+            buildOrcProjection(
+                map.keyId(), map.keyType(), isRequired, supportsInitialDefaults, mapping);
         TypeDescription valueType =
             buildOrcProjection(
-                root, map.valueId(), map.valueType(), isRequired && map.isValueRequired(), mapping);
+                map.valueId(),
+                map.valueType(),
+                isRequired && map.isValueRequired(),
+                supportsInitialDefaults,
+                mapping);
         Preconditions.checkArgument(keyType != null, "Invalid key type: unknown");
         Preconditions.checkArgument(valueType != null, "Invalid value type: unknown");
         orcType = TypeDescription.createMap(keyType, valueType);
@@ -395,21 +423,8 @@ public final class ORCSchemaUtil {
             orcType = originalType.clone();
           }
         } else {
-          Types.NestedField field = root.findField(fieldId);
-          if (isRequired) {
-            Preconditions.checkArgument(
-                field.initialDefault() != null,
-                "Missing required field: %s (%s)",
-                root.findColumnName(fieldId),
-                type);
-          }
-
-          if (field.initialDefault() != null) {
-            throw new UnsupportedOperationException(
-                String.format(
-                    "ORC cannot read default value for field %s (%s): %s",
-                    root.findColumnName(fieldId), type, field.initialDefault()));
-          }
+          Preconditions.checkArgument(
+              !isRequired, "Field %s of type %s is required and was not found.", fieldId, type);
 
           orcType = convert(fieldId, type, false);
         }

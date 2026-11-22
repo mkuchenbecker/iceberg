@@ -939,7 +939,11 @@ public class TestRewritePositionDeleteFilesAction extends CatalogTestBase {
         TableProperties.DEFAULT_FILE_FORMAT,
         format.toString(),
         TableProperties.DELETE_GRANULARITY,
-        DeleteGranularity.PARTITION.toString());
+        DeleteGranularity.PARTITION.toString(),
+        // partitioned writes default to NONE distribution; these tests expect data clustered into
+        // one file per partition, so request HASH explicitly to keep file counts deterministic
+        TableProperties.WRITE_DISTRIBUTION_MODE,
+        TableProperties.WRITE_DISTRIBUTION_MODE_HASH);
   }
 
   private void writeRecords(Table table, int files, int numRecords) {

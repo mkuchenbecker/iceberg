@@ -101,6 +101,11 @@ public class ResolvingFileIO
   }
 
   @Override
+  public OutputFile newOutputFile(String location, Map<String, String> fileProperties) {
+    return io(location).newOutputFile(location, fileProperties);
+  }
+
+  @Override
   public void deleteFile(String location) {
     io(location).deleteFile(location);
   }

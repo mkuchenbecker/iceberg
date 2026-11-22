@@ -130,4 +130,7 @@ public class SparkSQLProperties {
 
   // Permits any ANSI cast, which can truncate values or fail at runtime
   public static final String VIEW_SCHEMA_MODE_COMPENSATION = "COMPENSATION";
+
+  // Controls the replication factor of delete files
+  public static final String DELETE_FILE_REPLICATION = "spark.sql.iceberg.delete-file-replication";
 }

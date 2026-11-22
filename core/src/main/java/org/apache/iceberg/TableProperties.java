@@ -462,4 +462,7 @@ public class TableProperties {
   public static final int ENCRYPTION_DEK_LENGTH_DEFAULT = 16;
 
   public static final int ENCRYPTION_AAD_LENGTH_DEFAULT = 16;
+
+  /** Replication factor of delete files; when not set the file system default is used. */
+  public static final String DELETE_FILE_REPLICATION = "write.delete-file-replication";
 }

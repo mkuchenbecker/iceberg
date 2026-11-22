@@ -153,7 +153,28 @@ public class SparkReadConf {
         .parseOptional();
   }
 
+  /**
+   * Returns the split size. Precedence: read option, {@link SparkSQLProperties#SPLIT_SIZE}, {@link
+   * SparkSQLProperties#READ_SPLIT_SIZE}, table property, default.
+   *
+   * <p>LinkedIn's line is: read option, {@code spark.sql.iceberg.split-size}, table property,
+   * default. Apache's {@code spark.sql.iceberg.read.split-size} is kept as well. The order between
+   * the two session keys (LinkedIn's first) is a choice made in this port, not something LinkedIn
+   * defines, because LinkedIn's line has only its own key. As on LinkedIn's line, LinkedIn's key is
+   * read here only and is not part of {@link #splitSizeOption()}.
+   */
   public long splitSize() {
+    Long optionValue = confParser.longConf().option(SparkReadOptions.SPLIT_SIZE).parseOptional();
+    if (optionValue != null) {
+      return optionValue;
+    }
+
+    Long linkedInSessionValue =
+        confParser.longConf().sessionConf(SparkSQLProperties.SPLIT_SIZE).parseOptional();
+    if (linkedInSessionValue != null) {
+      return linkedInSessionValue;
+    }
+
     return confParser
         .longConf()
         .option(SparkReadOptions.SPLIT_SIZE)

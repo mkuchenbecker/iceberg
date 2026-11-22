@@ -19,9 +19,11 @@
 package org.apache.iceberg.spark.data;
 
 import static org.apache.iceberg.spark.data.TestHelpers.assertEquals;
+import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.iceberg.Files;
@@ -34,6 +36,7 @@ import org.apache.iceberg.types.Types;
 import org.apache.orc.OrcFile;
 import org.apache.orc.TypeDescription;
 import org.apache.orc.Writer;
+import org.apache.orc.storage.ql.exec.vector.BytesColumnVector;
 import org.apache.orc.storage.ql.exec.vector.LongColumnVector;
 import org.apache.orc.storage.ql.exec.vector.VectorizedRowBatch;
 import org.apache.spark.sql.catalyst.InternalRow;
@@ -133,6 +136,67 @@ public class TestSparkOrcReaderForFieldsWithDefaultValue {
     }
   }
 
+  @Test
+  public void testPartialEmbeddedIdsDoNotFillDefault() throws IOException {
+    // A file with some iceberg.id attributes takes the EMBEDDED path, but hasAllIds is false, so
+    // an unannotated physical column must not be treated as absent and filled with the default.
+    TypeDescription orcSchema = TypeDescription.fromString("struct<col1:int,col2:string>");
+    orcSchema.getChildren().get(0).setAttribute("iceberg.id", "1");
+
+    Schema readSchema =
+        new Schema(
+            Types.NestedField.required(1, "col1", Types.IntegerType.get()),
+            Types.NestedField.optional("col2")
+                .withId(2)
+                .ofType(Types.StringType.get())
+                .withInitialDefault(Expressions.lit("foo"))
+                .build());
+
+    File orcFile = writeOrcWithIntAndString(orcSchema, 1, "CA");
+
+    try (CloseableIterable<InternalRow> reader =
+        ORC.read(Files.localInput(orcFile))
+            .project(readSchema)
+            .createReaderFunc(readOrcSchema -> new SparkOrcReader(readSchema, readOrcSchema))
+            .supportsInitialDefaults()
+            .build()) {
+      InternalRow row = reader.iterator().next();
+      assertThat(row.getInt(0)).isEqualTo(1);
+      assertThat(row.isNullAt(1))
+          .as("unannotated physical column must not be replaced by the default")
+          .isTrue();
+    }
+  }
+
+  @Test
+  public void testNoEmbeddedIdsDoNotFillDefault() throws IOException {
+    // A file without any iceberg.id attributes is resolved through a name mapping. An unmatched
+    // name does not prove the column was never written, so the default is not filled.
+    TypeDescription orcSchema = TypeDescription.fromString("struct<col1:int>");
+
+    Schema readSchema =
+        new Schema(
+            Types.NestedField.required(1, "col1", Types.IntegerType.get()),
+            Types.NestedField.optional("col2")
+                .withId(2)
+                .ofType(Types.StringType.get())
+                .withInitialDefault(Expressions.lit("foo"))
+                .build());
+
+    File orcFile = writeOrcWithIntColumn(orcSchema, 1);
+
+    try (CloseableIterable<InternalRow> reader =
+        ORC.read(Files.localInput(orcFile))
+            .project(readSchema)
+            .createReaderFunc(readOrcSchema -> new SparkOrcReader(readSchema, readOrcSchema))
+            .supportsInitialDefaults()
+            .build()) {
+      InternalRow row = reader.iterator().next();
+      assertThat(row.getInt(0)).isEqualTo(0);
+      assertThat(row.isNullAt(1)).isTrue();
+    }
+  }
+
   private File writeOrcWithIntColumn(TypeDescription orcSchema, int numRows) throws IOException {
     Configuration conf = new Configuration();
     File orcFile = temp.resolve("data-" + (fileCount++) + ".orc").toFile();
@@ -156,6 +220,27 @@ public class TestSparkOrcReaderForFieldsWithDefaultValue {
       writer.addRowBatch(batch);
       batch.reset();
     }
+    writer.close();
+    return orcFile;
+  }
+
+  private File writeOrcWithIntAndString(TypeDescription orcSchema, int intValue, String stringValue)
+      throws IOException {
+    Configuration conf = new Configuration();
+    File orcFile = temp.resolve("data-" + (fileCount++) + ".orc").toFile();
+    org.apache.hadoop.fs.Path orcFilePath = new org.apache.hadoop.fs.Path(orcFile.getPath());
+
+    Writer writer =
+        OrcFile.createWriter(
+            orcFilePath, OrcFile.writerOptions(conf).setSchema(orcSchema).overwrite(true));
+
+    VectorizedRowBatch batch = orcSchema.createRowBatch();
+    LongColumnVector intCol = (LongColumnVector) batch.cols[0];
+    BytesColumnVector strCol = (BytesColumnVector) batch.cols[1];
+    int row = batch.size++;
+    intCol.vector[row] = intValue;
+    strCol.setVal(row, stringValue.getBytes(StandardCharsets.UTF_8));
+    writer.addRowBatch(batch);
     writer.close();
     return orcFile;
   }

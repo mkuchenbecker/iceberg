@@ -135,6 +135,21 @@ public class SparkWriteConf {
         .parse();
   }
 
+  public short deleteFileReplication() {
+    int replication =
+        confParser
+            .intConf()
+            .option(SparkWriteOptions.DELETE_FILE_REPLICATION)
+            .defaultValue(SparkWriteOptions.DEFAULT_DELETE_FILE_REPLICATION)
+            .parse();
+    Preconditions.checkArgument(
+        replication >= 0 && replication <= Short.MAX_VALUE,
+        "Invalid delete file replication: %s (must be between 0 and %s)",
+        replication,
+        Short.MAX_VALUE);
+    return (short) replication;
+  }
+
   public String wapId() {
     return sessionConf.get(SparkSQLProperties.WAP_ID, null);
   }

@@ -641,6 +641,47 @@ public class TestSparkWriteConf extends TestBaseWithCatalog {
         });
   }
 
+  @TestTemplate
+  public void testDeleteFileReplicationNotSetByDefault() {
+    Table table = validationCatalog.loadTable(tableIdent);
+    SparkWriteConf writeConf = new SparkWriteConf(spark, table, ImmutableMap.of());
+
+    // not set means the file system default replication is used
+    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 0);
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationFromWriteOption() {
+    Table table = validationCatalog.loadTable(tableIdent);
+
+    SparkWriteConf writeConf =
+        new SparkWriteConf(
+            spark, table, ImmutableMap.of(SparkWriteOptions.DELETE_FILE_REPLICATION, "5"));
+    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 5);
+
+    writeConf =
+        new SparkWriteConf(
+            spark,
+            table,
+            ImmutableMap.of(
+                SparkWriteOptions.DELETE_FILE_REPLICATION, String.valueOf(Short.MAX_VALUE)));
+    assertThat(writeConf.deleteFileReplication()).isEqualTo(Short.MAX_VALUE);
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationOutOfRange() {
+    Table table = validationCatalog.loadTable(tableIdent);
+
+    for (String invalid : new String[] {"-1", "40000"}) {
+      SparkWriteConf writeConf =
+          new SparkWriteConf(
+              spark, table, ImmutableMap.of(SparkWriteOptions.DELETE_FILE_REPLICATION, invalid));
+      assertThatThrownBy(writeConf::deleteFileReplication)
+          .isInstanceOf(IllegalArgumentException.class)
+          .hasMessageContaining("delete file replication");
+    }
+  }
+
   private void checkMode(DistributionMode expectedMode, SparkWriteConf writeConf) {
     assertThat(writeConf.distributionMode()).isEqualTo(expectedMode);
     assertThat(writeConf.copyOnWriteDistributionMode(DELETE)).isEqualTo(expectedMode);

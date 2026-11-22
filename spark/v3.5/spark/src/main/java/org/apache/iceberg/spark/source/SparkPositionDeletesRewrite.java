@@ -83,6 +83,7 @@ public class SparkPositionDeletesRewrite implements Write {
   private final int specId;
   private final StructLike partition;
   private final Map<String, String> writeProperties;
+  private final short deleteFileReplication;
 
   /**
    * Constructs a {@link SparkPositionDeletesRewrite}.
@@ -117,6 +118,7 @@ public class SparkPositionDeletesRewrite implements Write {
     this.specId = specId;
     this.partition = partition;
     this.writeProperties = writeConf.writeProperties();
+    this.deleteFileReplication = writeConf.deleteFileReplication();
   }
 
   @Override
@@ -142,7 +144,8 @@ public class SparkPositionDeletesRewrite implements Write {
           dsSchema,
           specId,
           partition,
-          writeProperties);
+          writeProperties,
+          deleteFileReplication);
     }
 
     @Override
@@ -194,6 +197,7 @@ public class SparkPositionDeletesRewrite implements Write {
     private final int specId;
     private final StructLike partition;
     private final Map<String, String> writeProperties;
+    private final short deleteFileReplication;
 
     PositionDeletesWriterFactory(
         Broadcast<Table> tableBroadcast,
@@ -205,7 +209,8 @@ public class SparkPositionDeletesRewrite implements Write {
         StructType dsSchema,
         int specId,
         StructLike partition,
-        Map<String, String> writeProperties) {
+        Map<String, String> writeProperties,
+        short deleteFileReplication) {
       this.tableBroadcast = tableBroadcast;
       this.queryId = queryId;
       this.format = format;
@@ -216,6 +221,7 @@ public class SparkPositionDeletesRewrite implements Write {
       this.specId = specId;
       this.partition = partition;
       this.writeProperties = writeProperties;
+      this.deleteFileReplication = deleteFileReplication;
     }
 
     @Override
@@ -228,6 +234,7 @@ public class SparkPositionDeletesRewrite implements Write {
               .format(formatVersion >= 3 ? FileFormat.PUFFIN : format)
               .operationId(queryId)
               .suffix("deletes")
+              .replicationFactor(deleteFileReplication)
               .build();
 
       if (formatVersion >= 3) {

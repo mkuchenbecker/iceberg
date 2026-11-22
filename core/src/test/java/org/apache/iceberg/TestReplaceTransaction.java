@@ -131,6 +131,31 @@ public class TestReplaceTransaction extends TestBase {
   }
 
   @TestTemplate
+  public void testReplaceTransactionReadsRetryPropertiesFromReplacementMetadata() {
+    // the existing table keeps the default retry count; only the replacement sets it to 0
+    assertThat(table.properties()).doesNotContainKey(TableProperties.COMMIT_NUM_RETRIES);
+
+    TestTables.TestTableOperations replaceOps =
+        new TestTables.TestTableOperations("test", tableDir);
+    Transaction replace =
+        TestTables.beginReplace(
+            tableDir,
+            "test",
+            table.schema(),
+            unpartitioned(),
+            SortOrder.unsorted(),
+            ImmutableMap.of(TableProperties.COMMIT_NUM_RETRIES, "0"),
+            replaceOps);
+
+    // cause the commit to fail; with zero retries it must not be retried
+    replaceOps.failCommits(1);
+
+    assertThatThrownBy(replace::commitTransaction)
+        .isInstanceOf(CommitFailedException.class)
+        .hasMessage("Injected failure");
+  }
+
+  @TestTemplate
   public void testReplaceWithIncompatibleSchemaUpdate() {
     assumeThat(formatVersion)
         .as("Fails early for v1 tables because partition spec cannot drop a field")

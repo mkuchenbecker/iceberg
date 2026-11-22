@@ -258,6 +258,23 @@ public class TestTransaction extends TestBase {
   }
 
   @TestTemplate
+  public void testTransactionReadsRetryPropertiesFromCurrentMetadata() {
+    // the table keeps the default retry count; only the transaction sets it to 0
+    assertThat(table.properties()).doesNotContainKey(TableProperties.COMMIT_NUM_RETRIES);
+
+    Transaction txn = table.newTransaction();
+    txn.updateProperties().set(TableProperties.COMMIT_NUM_RETRIES, "0").commit();
+    txn.newAppend().appendFile(FILE_A).commit();
+
+    // cause the transaction commit to fail; with zero retries it must not be retried
+    table.ops().failCommits(1);
+
+    assertThatThrownBy(txn::commitTransaction)
+        .isInstanceOf(CommitFailedException.class)
+        .hasMessage("Injected failure");
+  }
+
+  @TestTemplate
   public void testTransactionFailureBulkDeletionCleanup() throws IOException {
     TestTables.TestBulkLocalFileIO spyFileIO = Mockito.spy(new TestTables.TestBulkLocalFileIO());
     Mockito.doNothing().when(spyFileIO).deleteFiles(any());

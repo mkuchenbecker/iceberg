@@ -43,8 +43,8 @@ import org.junit.jupiter.params.provider.ValueSource;
  * replication factor passed to every stream creation, which is what HDFS would receive in
  * production. Merge-on-read deletes produce the delete files that are inspected.
  *
- * <p>Delete files are written as Avro here: the Parquet writer opens Hadoop output files by path
- * and does not go through {@link org.apache.iceberg.hadoop.HadoopOutputFile#create()}.
+ * <p>Delete files are written as Avro and ORC here: the Parquet writer opens Hadoop output files by
+ * path and does not go through {@link org.apache.iceberg.hadoop.HadoopOutputFile#create()}.
  */
 public class TestDeleteFileReplication extends TestBase {
 
@@ -70,7 +70,7 @@ public class TestDeleteFileReplication extends TestBase {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"avro"})
+  @ValueSource(strings = {"avro", "orc"})
   public void testDeleteFileReplicationFromTableProperty(String deleteFormat) {
     createTable(deleteFormat, ", 'write.delete-file-replication'='5'");
     sql("INSERT INTO %s VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')", TABLE);
@@ -84,7 +84,7 @@ public class TestDeleteFileReplication extends TestBase {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"avro"})
+  @ValueSource(strings = {"avro", "orc"})
   public void testDeleteFileReplicationFromSessionConf(String deleteFormat) {
     createTable(deleteFormat, "");
     sql("INSERT INTO %s VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')", TABLE);
@@ -101,7 +101,7 @@ public class TestDeleteFileReplication extends TestBase {
   }
 
   @ParameterizedTest
-  @ValueSource(strings = {"avro"})
+  @ValueSource(strings = {"avro", "orc"})
   public void testDeleteFilesUseFileSystemDefaultReplicationWhenNotConfigured(String deleteFormat) {
     createTable(deleteFormat, "");
     sql("INSERT INTO %s VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')", TABLE);

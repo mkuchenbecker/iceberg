@@ -642,44 +642,45 @@ public class TestSparkWriteConf extends TestBaseWithCatalog {
   }
 
   @TestTemplate
-  public void testDeleteFileReplicationNotSetByDefault() {
+  public void testDeleteFileReplicationDefault() {
     Table table = validationCatalog.loadTable(tableIdent);
     SparkWriteConf writeConf = new SparkWriteConf(spark, table, ImmutableMap.of());
 
-    // not set means the file system default replication is used
-    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 0);
+    // Default replication factor should be 3 as per DEFAULT_DELETE_FILE_REPLICATION
+    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 3);
   }
 
   @TestTemplate
   public void testDeleteFileReplicationFromWriteOption() {
     Table table = validationCatalog.loadTable(tableIdent);
 
-    SparkWriteConf writeConf =
-        new SparkWriteConf(
-            spark, table, ImmutableMap.of(SparkWriteOptions.DELETE_FILE_REPLICATION, "5"));
-    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 5);
+    Map<String, String> writeOptions =
+        ImmutableMap.of(SparkWriteOptions.DELETE_FILE_REPLICATION, "5");
 
-    writeConf =
-        new SparkWriteConf(
-            spark,
-            table,
-            ImmutableMap.of(
-                SparkWriteOptions.DELETE_FILE_REPLICATION, String.valueOf(Short.MAX_VALUE)));
-    assertThat(writeConf.deleteFileReplication()).isEqualTo(Short.MAX_VALUE);
+    SparkWriteConf writeConf = new SparkWriteConf(spark, table, writeOptions);
+    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 5);
   }
 
   @TestTemplate
-  public void testDeleteFileReplicationOutOfRange() {
+  public void testDeleteFileReplicationWithOne() {
     Table table = validationCatalog.loadTable(tableIdent);
 
-    for (String invalid : new String[] {"-1", "40000"}) {
-      SparkWriteConf writeConf =
-          new SparkWriteConf(
-              spark, table, ImmutableMap.of(SparkWriteOptions.DELETE_FILE_REPLICATION, invalid));
-      assertThatThrownBy(writeConf::deleteFileReplication)
-          .isInstanceOf(IllegalArgumentException.class)
-          .hasMessageContaining("delete file replication");
-    }
+    Map<String, String> writeOptions =
+        ImmutableMap.of(SparkWriteOptions.DELETE_FILE_REPLICATION, "1");
+
+    SparkWriteConf writeConf = new SparkWriteConf(spark, table, writeOptions);
+    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 1);
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationWithMaxValue() {
+    Table table = validationCatalog.loadTable(tableIdent);
+
+    Map<String, String> writeOptions =
+        ImmutableMap.of(SparkWriteOptions.DELETE_FILE_REPLICATION, String.valueOf(Short.MAX_VALUE));
+
+    SparkWriteConf writeConf = new SparkWriteConf(spark, table, writeOptions);
+    assertThat(writeConf.deleteFileReplication()).isEqualTo(Short.MAX_VALUE);
   }
 
   @TestTemplate

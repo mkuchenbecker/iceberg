@@ -22,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Map;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.iceberg.io.OutputFile;
@@ -104,28 +105,35 @@ public class TestHadoopOutputFileReplication {
         .isEqualTo(fsDefaultReplication(path));
   }
 
+  // LinkedIn behavior: file properties without a replication factor default to 3
   @Test
-  public void testDefaultReplicationWhenPropertyMissing() throws IOException {
-    Path path = path("missing-property.txt");
+  public void testReplicationDefaultsToThreeWhenPropertyMissing() throws IOException {
     HadoopFileIO io = new HadoopFileIO(conf);
 
-    write(io.newOutputFile(path.toString(), ImmutableMap.of()).create());
-
+    write(io.newOutputFile(path("missing-property.txt").toString(), ImmutableMap.of()).create());
     assertThat(ReplicationCapturingFileSystem.capturedReplication("missing-property.txt"))
-        .isEqualTo(fsDefaultReplication(path));
+        .isEqualTo((short) 3);
+
+    write(
+        HadoopOutputFile.fromPath(path("null-properties.txt"), conf, (Map<String, String>) null)
+            .create());
+    assertThat(ReplicationCapturingFileSystem.capturedReplication("null-properties.txt"))
+        .isEqualTo((short) 3);
   }
 
+  // LinkedIn behavior: an unparsable replication factor falls back to 3
   @Test
-  public void testDefaultReplicationWhenPropertyInvalid() throws IOException {
-    Path path = path("invalid-property.txt");
+  public void testReplicationDefaultsToThreeWhenPropertyInvalid() throws IOException {
     OutputFile file =
         HadoopOutputFile.fromPath(
-            path, conf, ImmutableMap.of(OutputFileFactory.FILE_REPLICATION_FACTOR, "invalid"));
+            path("invalid-property.txt"),
+            conf,
+            ImmutableMap.of(OutputFileFactory.FILE_REPLICATION_FACTOR, "invalid"));
 
     write(file.create());
 
     assertThat(ReplicationCapturingFileSystem.capturedReplication("invalid-property.txt"))
-        .isEqualTo(fsDefaultReplication(path));
+        .isEqualTo((short) 3);
   }
 
   @Test

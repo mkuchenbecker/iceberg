@@ -172,14 +172,16 @@ public class OutputFileFactory {
     }
 
     /**
-     * Sets the replication factor of the created files. A non-positive value means the file system
-     * default is used, which is the default behavior.
+     * Sets the replication factor of the created files. A non-positive value is ignored, so the
+     * file system default is used unless a positive factor was set.
      *
      * @param replicationFactor the replication factor of the output files
      * @return this builder instance
      */
     public Builder replicationFactor(short replicationFactor) {
-      this.replicationFactor = replicationFactor > 0 ? replicationFactor : null;
+      if (replicationFactor > 0) {
+        this.replicationFactor = replicationFactor;
+      }
       return this;
     }
 

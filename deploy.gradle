@@ -93,7 +93,7 @@ subprojects {
             }
           }
 
-          groupId = 'org.apache.iceberg'
+          groupId = project.group.toString()
           pom {
             name = 'Apache Iceberg'
             description = 'A table format for huge analytic datasets'

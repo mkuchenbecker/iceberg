@@ -19,6 +19,7 @@
 package org.apache.iceberg.spark.source;
 
 import java.io.IOException;
+import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.stream.Collectors;
@@ -41,6 +42,7 @@ import org.apache.iceberg.expressions.BoundAggregate;
 import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.relocated.com.google.common.base.Preconditions;
+import org.apache.iceberg.relocated.com.google.common.collect.ImmutableList;
 import org.apache.iceberg.relocated.com.google.common.collect.Lists;
 import org.apache.iceberg.spark.Spark3Util;
 import org.apache.iceberg.spark.SparkAggregates;
@@ -78,6 +80,7 @@ public class SparkScanBuilder extends BaseSparkScanBuilder
   private final Long startSnapshotId;
   private final Long endSnapshotId;
   private Scan localScan;
+  private Collection<String> columnStatsColumns = ImmutableList.of();
 
   SparkScanBuilder(SparkSession spark, Table table, CaseInsensitiveStringMap options) {
     this(
@@ -248,6 +251,25 @@ public class SparkScanBuilder extends BaseSparkScanBuilder
     return true;
   }
 
+  /**
+   * Requests that per-file column statistics (lower/upper bounds) be retained on the scanned data
+   * files for the given columns, so a consumer can read column-value bounds off the planned tasks
+   * without a second scan.
+   *
+   * <p>This is the version-agnostic control API: callers pass the columns they care about so the
+   * same call site works across Iceberg versions. The columns map to the per-column {@code
+   * org.apache.iceberg.Scan#includeColumnStats(Collection)}; column names are resolved against the
+   * scan schema honoring case sensitivity, and unknown columns are ignored. An empty or null list
+   * is a no-op.
+   *
+   * @param columns the columns whose stats should be retained
+   * @return this builder
+   */
+  public SparkScanBuilder includeColumnStats(Collection<String> columns) {
+    this.columnStatsColumns = columns == null ? ImmutableList.of() : columns;
+    return this;
+  }
+
   @Override
   public Scan build() {
     if (localScan != null) {
@@ -267,7 +289,11 @@ public class SparkScanBuilder extends BaseSparkScanBuilder
         schema(),
         snapshot,
         branch,
-        buildIcebergBatchScan(projection, false /* use residuals */, false /* no stats */),
+        buildIcebergBatchScan(
+            projection,
+            false /* use residuals */,
+            false /* no stats */,
+            true /* retain stats of columns requested via includeColumnStats */),
         readConf(),
         projection,
         filters(),
@@ -346,6 +372,11 @@ public class SparkScanBuilder extends BaseSparkScanBuilder
 
   private BatchScan buildIcebergBatchScan(
       Schema projection, boolean ignoreResiduals, boolean withStats) {
+    return buildIcebergBatchScan(projection, ignoreResiduals, withStats, false);
+  }
+
+  private BatchScan buildIcebergBatchScan(
+      Schema projection, boolean ignoreResiduals, boolean withStats, boolean retainRequestedStats) {
     if (shouldPinSnapshot() && snapshot == null) {
       return null;
     }
@@ -371,18 +402,62 @@ public class SparkScanBuilder extends BaseSparkScanBuilder
       scan = scan.ignoreResiduals();
     }
 
-    scan = includeStats(scan, projection, withStats);
+    scan = includeStats(scan, projection, withStats, retainRequestedStats);
 
     return configureSplitPlanning(scan);
   }
 
   private <S extends org.apache.iceberg.Scan<S, ?, ?>> S includeStats(
       S scan, Schema projection, boolean withStats) {
+    return includeStats(scan, projection, withStats, false);
+  }
+
+  private <S extends org.apache.iceberg.Scan<S, ?, ?>> S includeStats(
+      S scan, Schema projection, boolean withStats, boolean retainRequestedStats) {
     if (withStats) {
       return scan.includeColumnStats();
     }
+
     List<String> variantColumns = variantColumnNames(projection);
+
+    // with full stats already requested there is nothing to narrow; otherwise retain the stats of
+    // the columns requested via includeColumnStats(Collection) next to the variant columns
+    if (retainRequestedStats) {
+      try {
+        List<String> statsColumns = resolveColumnStatsColumns(projection);
+        if (!statsColumns.isEmpty()) {
+          List<String> columns = Lists.newArrayList(variantColumns);
+          statsColumns.stream().filter(name -> !columns.contains(name)).forEach(columns::add);
+          return scan.includeColumnStats(columns);
+        }
+      } catch (RuntimeException e) {
+        LOG.warn("Skipping column-stats retention due to an error", e);
+      }
+    }
+
     return variantColumns.isEmpty() ? scan : scan.includeColumnStats(variantColumns);
+  }
+
+  /**
+   * Resolves the columns requested via {@link #includeColumnStats(Collection)} against the scan
+   * schema, honoring case sensitivity and returning canonical schema names. Unknown columns are
+   * ignored. Returns an empty list when nothing was requested.
+   */
+  private List<String> resolveColumnStatsColumns(Schema projection) {
+    if (columnStatsColumns.isEmpty()) {
+      return ImmutableList.of();
+    }
+
+    List<String> statsColumns = Lists.newArrayList();
+    for (String name : columnStatsColumns) {
+      Types.NestedField field =
+          caseSensitive() ? projection.findField(name) : projection.caseInsensitiveFindField(name);
+      if (field != null) {
+        statsColumns.add(field.name());
+      }
+    }
+
+    return statsColumns;
   }
 
   private List<String> variantColumnNames(Schema projection) {

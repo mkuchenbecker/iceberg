@@ -131,7 +131,9 @@ class SparkWriteBuilder implements WriteBuilder, SupportsDynamicOverwrite, Suppo
     validateRowLineage();
     Schema writeSchema = mergeSchema ? mergeAndValidateWriteSchema() : validateWriteSchema();
     SparkUtil.validatePartitionTransforms(table.spec());
+    // Get application id and name
     String appId = spark.sparkContext().applicationId();
+    String appName = spark.sparkContext().appName();
 
     return new SparkWrite(
         spark,
@@ -140,6 +142,7 @@ class SparkWriteBuilder implements WriteBuilder, SupportsDynamicOverwrite, Suppo
         writeConf,
         info,
         appId,
+        appName,
         writeSchema,
         sparkWriteSchema(),
         writeRequirements()) {

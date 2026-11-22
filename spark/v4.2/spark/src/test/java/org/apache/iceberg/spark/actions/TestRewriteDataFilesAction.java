@@ -70,6 +70,7 @@ import org.apache.iceberg.Parameters;
 import org.apache.iceberg.PartitionData;
 import org.apache.iceberg.PartitionKey;
 import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.RewriteJobOrder;
 import org.apache.iceberg.RowDelta;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Snapshot;
@@ -1443,6 +1444,200 @@ public class TestRewriteDataFilesAction extends TestBase {
         // To tolerate 1 random commit failure
         .hasSizeGreaterThanOrEqualTo(10);
     shouldHaveNoOrphans(table);
+    shouldHaveACleanCache(table);
+  }
+
+  @TestTemplate
+  public void testRewriteJobOrderFilesMinSequenceNumberAsc() {
+    Table table = createTablePartitioned(4, 2);
+
+    // Write additional files with different sequence numbers
+    writeRecords(1, SCALE, 1);
+    writeRecords(2, SCALE, 2);
+    writeRecords(3, SCALE, 3);
+    writeRecords(4, SCALE, 4);
+    writeRecords(5, SCALE, 5);
+    table.refresh();
+
+    List<Long> expected = minFileSequenceNumbers(planGroups(table, RewriteJobOrder.NONE));
+    List<Long> actual =
+        minFileSequenceNumbers(planGroups(table, RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC));
+
+    expected.sort(Comparator.naturalOrder());
+    assertThat(actual).as("Min sequence number order should be ascending").isEqualTo(expected);
+    Collections.reverse(expected);
+    assertThat(actual)
+        .as("Min sequence number order should not be descending")
+        .isNotEqualTo(expected);
+  }
+
+  @TestTemplate
+  public void testRewriteJobOrderFilesMinSequenceNumberDesc() {
+    Table table = createTablePartitioned(4, 2);
+
+    // Write additional files with different sequence numbers
+    writeRecords(1, SCALE, 1);
+    writeRecords(2, SCALE, 2);
+    writeRecords(3, SCALE, 3);
+    writeRecords(4, SCALE, 4);
+    writeRecords(5, SCALE, 5);
+    table.refresh();
+
+    List<Long> expected = minFileSequenceNumbers(planGroups(table, RewriteJobOrder.NONE));
+    List<Long> actual =
+        minFileSequenceNumbers(planGroups(table, RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_DESC));
+
+    expected.sort(Comparator.reverseOrder());
+    assertThat(actual).as("Min sequence number order should be descending").isEqualTo(expected);
+    Collections.reverse(expected);
+    assertThat(actual)
+        .as("Min sequence number order should not be ascending")
+        .isNotEqualTo(expected);
+  }
+
+  @TestTemplate
+  public void testMaxTotalFileGroupSizeBytes() {
+    Table table = createTable(20);
+    int fileSize = averageFileSize(table);
+
+    List<Object[]> originalData = currentData();
+    long dataSizeBefore = testDataSize(table);
+
+    // Set max total size to allow only ~5 file groups (2 files each)
+    long maxTotalSize = (long) (fileSize * 2.5 * 5);
+
+    RewriteDataFiles.Result result =
+        basicRewrite(table)
+            .option(
+                RewriteDataFiles.MAX_FILE_GROUP_SIZE_BYTES, Integer.toString(fileSize * 2 + 1000))
+            .option(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, Long.toString(maxTotalSize))
+            .execute();
+
+    // Should have processed approximately 5 groups instead of all 10
+    assertThat(result.rewriteResults())
+        .as("Should have limited number of file groups processed")
+        .hasSizeLessThanOrEqualTo(6);
+    assertThat(result.rewrittenBytesCount()).isGreaterThan(0L).isLessThan(dataSizeBefore);
+
+    table.refresh();
+
+    List<Object[]> postRewriteData = currentData();
+    assertEquals("We shouldn't have changed the data", originalData, postRewriteData);
+
+    shouldHaveSnapshots(table, 2);
+    shouldHaveACleanCache(table);
+  }
+
+  @TestTemplate
+  public void testMaxTotalFileGroupSizeBytesWithPartialProgress() {
+    Table table = createTable(20);
+    int fileSize = averageFileSize(table);
+
+    List<Object[]> originalData = currentData();
+    long dataSizeBefore = testDataSize(table);
+
+    // Set max total size to allow only ~5 file groups (2 files each)
+    long maxTotalSize = (long) (fileSize * 2.5 * 5);
+
+    RewriteDataFiles.Result result =
+        basicRewrite(table)
+            .option(
+                RewriteDataFiles.MAX_FILE_GROUP_SIZE_BYTES, Integer.toString(fileSize * 2 + 1000))
+            .option(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, Long.toString(maxTotalSize))
+            .option(RewriteDataFiles.PARTIAL_PROGRESS_ENABLED, "true")
+            .option(RewriteDataFiles.PARTIAL_PROGRESS_MAX_COMMITS, "3")
+            .execute();
+
+    // Should have processed approximately 5 groups instead of all 10
+    assertThat(result.rewriteResults())
+        .as("Should have limited number of file groups processed")
+        .hasSizeLessThanOrEqualTo(6);
+    assertThat(result.rewrittenBytesCount()).isGreaterThan(0L).isLessThan(dataSizeBefore);
+
+    table.refresh();
+
+    List<Object[]> postRewriteData = currentData();
+    assertEquals("We shouldn't have changed the data", originalData, postRewriteData);
+
+    // Should have fewer snapshots than without the limit
+    shouldHaveACleanCache(table);
+  }
+
+  @TestTemplate
+  public void testMaxTotalFileGroupSizeBytesNullMeansNoLimit() {
+    Table table = createTable(20);
+    int fileSize = averageFileSize(table);
+
+    List<Object[]> originalData = currentData();
+    long dataSizeBefore = testDataSize(table);
+
+    RewriteDataFiles.Result result =
+        basicRewrite(table)
+            .option(
+                RewriteDataFiles.MAX_FILE_GROUP_SIZE_BYTES, Integer.toString(fileSize * 2 + 1000))
+            .option(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, null)
+            .execute();
+
+    // Should process all 10 groups when limit is 0
+    assertThat(result.rewriteResults()).as("Should have 10 fileGroups").hasSize(10);
+    assertThat(result.rewrittenBytesCount()).isEqualTo(dataSizeBefore);
+
+    table.refresh();
+
+    List<Object[]> postRewriteData = currentData();
+    assertEquals("We shouldn't have changed the data", originalData, postRewriteData);
+
+    shouldHaveSnapshots(table, 2);
+    shouldHaveACleanCache(table);
+  }
+
+  @TestTemplate
+  public void testMaxTotalFilesSizeBytesRewritesOldestFilesFirst() {
+    Table table = createTable();
+    // every write is a separate commit, so files of later writes have higher sequence numbers
+    writeRecords(2, SCALE);
+    writeRecords(2, SCALE);
+    writeRecords(2, SCALE);
+    table.refresh();
+
+    List<FileScanTask> bySequenceNumber =
+        Streams.stream(table.newScan().planFiles())
+            .sorted(Comparator.comparing(task -> task.file().fileSequenceNumber()))
+            .collect(Collectors.toList());
+    assertThat(bySequenceNumber).hasSize(6);
+    Set<String> oldestFour =
+        bySequenceNumber.stream()
+            .limit(4)
+            .map(task -> task.file().location())
+            .collect(Collectors.toSet());
+    long budget = bySequenceNumber.stream().limit(4).mapToLong(FileScanTask::length).sum();
+
+    List<Object[]> originalData = currentData();
+
+    RewriteDataFiles.Result result =
+        basicRewrite(table)
+            .option(
+                RewriteDataFiles.REWRITE_JOB_ORDER,
+                RewriteJobOrder.FILES_MIN_SEQUENCE_NUMBER_ASC.orderName())
+            .option(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, Long.toString(budget))
+            .execute();
+
+    assertThat(result.rewrittenDataFilesCount()).isEqualTo(4);
+
+    table.refresh();
+    Set<String> remaining =
+        Streams.stream(table.newScan().planFiles())
+            .map(task -> task.file().location())
+            .collect(Collectors.toSet());
+    assertThat(remaining)
+        .as("The 4 oldest files must have been rewritten")
+        .doesNotContainAnyElementsOf(oldestFour);
+    assertThat(remaining)
+        .as("The 2 newest files must be left alone")
+        .contains(
+            bySequenceNumber.get(4).file().location(), bySequenceNumber.get(5).file().location());
+
+    assertEquals("We shouldn't have changed the data", originalData, currentData());
     shouldHaveACleanCache(table);
   }
 
@@ -2893,6 +3088,25 @@ public class TestRewriteDataFilesAction extends TestBase {
     } else {
       return fileFactory.newOutputFile(partition);
     }
+  }
+
+  private List<RewriteFileGroup> planGroups(Table table, RewriteJobOrder order) {
+    BinPackRewriteFilePlanner planner =
+        new BinPackRewriteFilePlanner(
+            table, Expressions.alwaysTrue(), table.currentSnapshot().snapshotId(), false);
+    planner.init(
+        ImmutableMap.of(
+            SizeBasedFileRewritePlanner.MIN_INPUT_FILES,
+            "1",
+            RewriteDataFiles.REWRITE_JOB_ORDER,
+            order.orderName()));
+    return Lists.newArrayList(planner.plan().groups().iterator());
+  }
+
+  private List<Long> minFileSequenceNumbers(List<RewriteFileGroup> groups) {
+    return groups.stream()
+        .map(RewriteFileGroup::minFileSequenceNumber)
+        .collect(Collectors.toList());
   }
 
   private SparkActions actions() {

@@ -109,6 +109,31 @@ public class TestDeleteFrom extends CatalogTestBase {
   }
 
   @TestTemplate
+  public void testSnapshotSummaryContainsSparkApplicationName() throws NoSuchTableException {
+    sql("CREATE TABLE %s (id bigint, data string) USING iceberg %s", tableName, tableProperties());
+
+    List<SimpleRecord> records =
+        Lists.newArrayList(
+            new SimpleRecord(1, "a"), new SimpleRecord(2, "b"), new SimpleRecord(3, "c"));
+    Dataset<Row> df = spark.createDataFrame(records, SimpleRecord.class);
+    df.coalesce(1).writeTo(tableName).append();
+
+    String appName = spark.sparkContext().appName();
+    Table table = validationCatalog.loadTable(tableIdent);
+    assertThat(table.currentSnapshot().summary())
+        .containsEntry("spark.app.id", spark.sparkContext().applicationId())
+        .containsEntry("spark.app.name", appName);
+
+    // a metadata-only delete goes through a different code path than a write
+    sql("DELETE FROM %s WHERE id < 4", tableName);
+
+    table.refresh();
+    assertThat(table.currentSnapshot().summary())
+        .containsEntry("spark.app.id", spark.sparkContext().applicationId())
+        .containsEntry("spark.app.name", appName);
+  }
+
+  @TestTemplate
   public void testDeleteFromTableAtSnapshot() throws NoSuchTableException {
     sql("CREATE TABLE %s (id bigint, data string) USING iceberg %s", tableName, tableProperties());
 

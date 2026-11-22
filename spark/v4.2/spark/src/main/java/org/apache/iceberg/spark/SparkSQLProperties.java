@@ -117,6 +117,10 @@ public class SparkSQLProperties {
   // Overrides the split target size for scan planning
   public static final String READ_SPLIT_SIZE = "spark.sql.iceberg.read.split-size";
 
+  // LinkedIn's key for the split size, kept so existing jobs that set it continue to work. As on
+  // LinkedIn's line it is honored by SparkReadConf#splitSize() only, not by splitSizeOption().
+  public static final String SPLIT_SIZE = "spark.sql.iceberg.split-size";
+
   // Overrides the parallelism used for adaptive split sizing. When unset, the parallelism
   // defaults to max(spark.default.parallelism, spark.sql.shuffle.partitions).
   public static final String READ_ADAPTIVE_SPLIT_SIZE_PARALLELISM =
@@ -134,4 +138,7 @@ public class SparkSQLProperties {
   // This determines how many rows are buffered before inferring shredded schema
   public static final String VARIANT_INFERENCE_BUFFER_SIZE =
       "spark.sql.iceberg.variant-inference-buffer-size";
+
+  // Controls the replication factor of delete files
+  public static final String DELETE_FILE_REPLICATION = "spark.sql.iceberg.delete-file-replication";
 }

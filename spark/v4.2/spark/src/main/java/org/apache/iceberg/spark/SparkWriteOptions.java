@@ -26,6 +26,12 @@ public class SparkWriteOptions {
   // Overrides the target branch for write operations
   public static final String BRANCH = "branch";
 
+  // Configuration to tune the replication factor for delete files.
+  public static final String DELETE_FILE_REPLICATION = "delete-file-replication";
+
+  // The default replication factor of delete files.
+  public static final short DEFAULT_DELETE_FILE_REPLICATION = 3;
+
   // Fileformat for write operations(default: Table write.format.default )
   public static final String WRITE_FORMAT = "write-format";
 

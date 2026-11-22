@@ -203,6 +203,10 @@ public class TestSparkWriteConf extends TestBaseWithCatalog {
   public void testAdvisoryPartitionSize() {
     Table table = validationCatalog.loadTable(tableIdent);
 
+    // An advisory partition size is only reported when a distribution is requested, and the
+    // default for partitioned tables is NONE, so explicitly request HASH.
+    table.updateProperties().set(WRITE_DISTRIBUTION_MODE, WRITE_DISTRIBUTION_MODE_HASH).commit();
+
     SparkWriteConf writeConf = new SparkWriteConf(spark, table);
 
     long value1 = writeConf.writeRequirements().advisoryPartitionSize();
@@ -223,7 +227,15 @@ public class TestSparkWriteConf extends TestBaseWithCatalog {
 
     SparkWriteConf writeConf = new SparkWriteConf(spark, table);
 
-    checkMode(DistributionMode.HASH, writeConf);
+    // normal writes to a partitioned (unsorted) table default to NONE; row-level operations
+    // (DELETE/UPDATE/MERGE) keep their HASH default
+    assertThat(writeConf.distributionMode()).isEqualTo(DistributionMode.NONE);
+    assertThat(writeConf.copyOnWriteDistributionMode(DELETE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.positionDeltaDistributionMode(DELETE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.copyOnWriteDistributionMode(UPDATE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.positionDeltaDistributionMode(UPDATE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.copyOnWriteDistributionMode(MERGE)).isEqualTo(DistributionMode.HASH);
+    assertThat(writeConf.positionDeltaDistributionMode(MERGE)).isEqualTo(DistributionMode.HASH);
   }
 
   @TestTemplate
@@ -693,6 +705,96 @@ public class TestSparkWriteConf extends TestBaseWithCatalog {
           }
 
           updateProperties.commit();
+        });
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationDefault() {
+    Table table = validationCatalog.loadTable(tableIdent);
+    SparkWriteConf writeConf = new SparkWriteConf(spark, table);
+
+    // Default replication factor should be 3 as per DEFAULT_DELETE_FILE_REPLICATION
+    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 3);
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationFromWriteOption() {
+    Table table = validationCatalog.loadTable(tableIdent);
+
+    CaseInsensitiveStringMap writeOptions =
+        new CaseInsensitiveStringMap(
+            ImmutableMap.of(SparkWriteOptions.DELETE_FILE_REPLICATION, "5"));
+
+    SparkWriteConf writeConf = new SparkWriteConf(spark, table, writeOptions);
+    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 5);
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationWithOne() {
+    Table table = validationCatalog.loadTable(tableIdent);
+
+    CaseInsensitiveStringMap writeOptions =
+        new CaseInsensitiveStringMap(
+            ImmutableMap.of(SparkWriteOptions.DELETE_FILE_REPLICATION, "1"));
+
+    SparkWriteConf writeConf = new SparkWriteConf(spark, table, writeOptions);
+    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 1);
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationWithMaxValue() {
+    Table table = validationCatalog.loadTable(tableIdent);
+
+    CaseInsensitiveStringMap writeOptions =
+        new CaseInsensitiveStringMap(
+            ImmutableMap.of(
+                SparkWriteOptions.DELETE_FILE_REPLICATION, String.valueOf(Short.MAX_VALUE)));
+
+    SparkWriteConf writeConf = new SparkWriteConf(spark, table, writeOptions);
+    assertThat(writeConf.deleteFileReplication()).isEqualTo(Short.MAX_VALUE);
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationFromSessionConf() {
+    Table table = validationCatalog.loadTable(tableIdent);
+
+    withSQLConf(
+        ImmutableMap.of(SparkSQLProperties.DELETE_FILE_REPLICATION, "6"),
+        () -> {
+          SparkWriteConf writeConf = new SparkWriteConf(spark, table);
+          assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 6);
+        });
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationFromTableProperty() {
+    Table table = validationCatalog.loadTable(tableIdent);
+    table.updateProperties().set(TableProperties.DELETE_FILE_REPLICATION, "4").commit();
+
+    SparkWriteConf writeConf = new SparkWriteConf(spark, table);
+    assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 4);
+  }
+
+  @TestTemplate
+  public void testDeleteFileReplicationPrecedence() {
+    Table table = validationCatalog.loadTable(tableIdent);
+    table.updateProperties().set(TableProperties.DELETE_FILE_REPLICATION, "4").commit();
+
+    withSQLConf(
+        ImmutableMap.of(SparkSQLProperties.DELETE_FILE_REPLICATION, "6"),
+        () -> {
+          // session conf overrides the table property
+          SparkWriteConf writeConf = new SparkWriteConf(spark, table);
+          assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 6);
+
+          // write option overrides both
+          writeConf =
+              new SparkWriteConf(
+                  spark,
+                  table,
+                  new CaseInsensitiveStringMap(
+                      ImmutableMap.of(SparkWriteOptions.DELETE_FILE_REPLICATION, "2")));
+          assertThat(writeConf.deleteFileReplication()).isEqualTo((short) 2);
         });
   }
 

@@ -200,6 +200,13 @@ class TestTables {
       return Files.localOutput(path);
     }
 
+    // Delete files are always created with a replication factor property (LinkedIn default of 3),
+    // which the FileIO default rejects; local files ignore it.
+    @Override
+    public OutputFile newOutputFile(String path, Map<String, String> properties) {
+      return Files.localOutput(path);
+    }
+
     @Override
     public void deleteFile(String path) {
       String localPath = path.startsWith("file:") ? path.replaceFirst("file:", "") : path;

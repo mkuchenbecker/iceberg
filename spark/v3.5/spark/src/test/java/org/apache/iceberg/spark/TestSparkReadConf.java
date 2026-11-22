@@ -23,6 +23,7 @@ import static org.assertj.core.api.Assertions.assertThatIllegalArgumentException
 
 import org.apache.iceberg.ParameterizedTestExtension;
 import org.apache.iceberg.Table;
+import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.relocated.com.google.common.collect.ImmutableMap;
 import org.apache.spark.sql.internal.SQLConf;
 import org.apache.spark.sql.util.CaseInsensitiveStringMap;
@@ -103,6 +104,74 @@ public class TestSparkReadConf extends TestBaseWithCatalog {
           assertThat(conf.splitSizeOption()).isEqualTo(42L);
           assertThat(conf.splitSize()).isEqualTo(42L);
         });
+  }
+
+  @TestTemplate
+  public void testSplitSizeLinkedInSessionConf() {
+    Table table = validationCatalog.loadTable(tableIdent);
+    withSQLConf(
+        ImmutableMap.of(SparkSQLProperties.SPLIT_SIZE, "42"),
+        () -> {
+          SparkReadConf conf = new SparkReadConf(spark, table, CaseInsensitiveStringMap.empty());
+          assertThat(conf.splitSize()).isEqualTo(42L);
+          // as on LinkedIn's line, the key is not part of splitSizeOption()
+          assertThat(conf.splitSizeOption()).isNull();
+        });
+  }
+
+  @TestTemplate
+  public void testSplitSizeLinkedInSessionConfOverridesTableProperty() {
+    table().updateProperties().set(TableProperties.SPLIT_SIZE, "77").commit();
+    Table table = table();
+    withSQLConf(
+        ImmutableMap.of(SparkSQLProperties.SPLIT_SIZE, "42"),
+        () -> {
+          SparkReadConf conf = new SparkReadConf(spark, table, CaseInsensitiveStringMap.empty());
+          assertThat(conf.splitSize()).isEqualTo(42L);
+        });
+  }
+
+  @TestTemplate
+  public void testSplitSizeReadOptionOverridesBothSessionConfs() {
+    Table table = validationCatalog.loadTable(tableIdent);
+    withSQLConf(
+        ImmutableMap.of(
+            SparkSQLProperties.SPLIT_SIZE, "24", SparkSQLProperties.READ_SPLIT_SIZE, "25"),
+        () -> {
+          CaseInsensitiveStringMap options =
+              new CaseInsensitiveStringMap(ImmutableMap.of(SparkReadOptions.SPLIT_SIZE, "42"));
+          SparkReadConf conf = new SparkReadConf(spark, table, options);
+          assertThat(conf.splitSize()).isEqualTo(42L);
+        });
+  }
+
+  @TestTemplate
+  public void testSplitSizeBothSessionConfsPreferLinkedInKey() {
+    // the ordering between the two keys is a choice made in this port; LinkedIn defines none
+    Table table = validationCatalog.loadTable(tableIdent);
+    withSQLConf(
+        ImmutableMap.of(
+            SparkSQLProperties.SPLIT_SIZE, "24", SparkSQLProperties.READ_SPLIT_SIZE, "25"),
+        () -> {
+          SparkReadConf conf = new SparkReadConf(spark, table, CaseInsensitiveStringMap.empty());
+          assertThat(conf.splitSize()).isEqualTo(24L);
+          assertThat(conf.splitSizeOption()).isEqualTo(25L);
+        });
+  }
+
+  @TestTemplate
+  public void testSplitSizeNoSessionConfUsesTablePropertyThenDefault() {
+    Table table = validationCatalog.loadTable(tableIdent);
+    SparkReadConf defaultConf = new SparkReadConf(spark, table, CaseInsensitiveStringMap.empty());
+    assertThat(defaultConf.splitSize()).isEqualTo(TableProperties.SPLIT_SIZE_DEFAULT);
+
+    table().updateProperties().set(TableProperties.SPLIT_SIZE, "77").commit();
+    SparkReadConf tableConf = new SparkReadConf(spark, table(), CaseInsensitiveStringMap.empty());
+    assertThat(tableConf.splitSize()).isEqualTo(77L);
+  }
+
+  private Table table() {
+    return validationCatalog.loadTable(tableIdent);
   }
 
   @TestTemplate

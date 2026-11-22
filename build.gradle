@@ -111,8 +111,12 @@ if (file("${rootDir}/iceberg-build.properties").exists()) {
 def projectVersion = getProjectVersion()
 final REVAPI_PROJECTS = ["iceberg-api", "iceberg-core", "iceberg-parquet", "iceberg-orc", "iceberg-common", "iceberg-data"]
 
+// -PpublishGroup / -PpublishVersion let downstream builds publish this tree locally under their
+// own coordinates (e.g. publishToMavenLocal for an integration build). Defaults are unchanged.
+def projectGroup = project.findProperty('publishGroup') ?: "org.apache.iceberg"
+
 allprojects {
-  group = "org.apache.iceberg"
+  group = projectGroup
   version = projectVersion
   repositories {
     mavenCentral()
@@ -140,7 +144,8 @@ subprojects {
   if (project.name in REVAPI_PROJECTS) {
     apply plugin: 'org.revapi.revapi-gradle-plugin'
     revapi {
-      oldGroup = project.group
+      // revapi compares against the Apache release, whatever group this build publishes under
+      oldGroup = "org.apache.iceberg"
       oldName = project.name
       oldVersion = "1.11.0"
     }
@@ -1210,6 +1215,10 @@ String getVersionFromFile() {
 }
 
 String getProjectVersion() {
+  if (project.hasProperty('publishVersion')) {
+    return project.property('publishVersion')
+  }
+
   if (versionFileExists()) {
     return getVersionFromFile()
   }
@@ -1231,6 +1240,10 @@ String getProjectVersion() {
 }
 
 String getJavadocVersion() {
+  if (project.hasProperty('publishVersion')) {
+    return project.property('publishVersion')
+  }
+
   if (versionFileExists()) {
     return getVersionFromFile()
   }

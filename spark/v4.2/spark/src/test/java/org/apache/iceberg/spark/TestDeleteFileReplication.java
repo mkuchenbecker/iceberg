@@ -100,21 +100,16 @@ public class TestDeleteFileReplication extends TestBase {
         .containsExactly(3, 4, 5);
   }
 
+  // LinkedIn behavior: delete files are always written with replication 3 unless configured
   @ParameterizedTest
   @ValueSource(strings = {"avro", "orc"})
-  public void testDeleteFilesUseFileSystemDefaultReplicationWhenNotConfigured(String deleteFormat) {
+  public void testDeleteFilesUseDefaultReplicationWhenNotConfigured(String deleteFormat) {
     createTable(deleteFormat, "");
     sql("INSERT INTO %s VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd'), (5, 'e')", TABLE);
     sql("DELETE FROM %s WHERE id IN (1, 2)", TABLE);
 
-    List<Object[]> deleteFiles = sql("SELECT file_path FROM %s.delete_files", TABLE);
-    assertThat(deleteFiles).isNotEmpty();
-    for (Object[] row : deleteFiles) {
-      String location = (String) row[0];
-      assertThat(CaptureReplicationFileSystem.capturedReplication(location))
-          .as("Delete file %s should keep the filesystem default replication", location)
-          .isEqualTo(defaultReplication(location));
-    }
+    assertDeleteFileReplication(deleteFormat, (short) 3);
+    assertDataFilesUseDefaultReplication();
   }
 
   private void createTable(String deleteFormat, String extraProperties) {

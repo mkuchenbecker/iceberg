@@ -806,7 +806,7 @@ class TestBinPackRewriteFilePlanner {
   }
 
   @Test
-  void testMaxTotalFilesSizeBytesCountsDeleteFiles() throws Exception {
+  void testMaxTotalFilesSizeBytesIgnoresDeleteFiles() throws Exception {
     // position delete files are not allowed in v3 tables
     TestTables.TestTable v2Table =
         TestTables.create(new File(tableDir, "v2"), "test-v2", TestBase.SCHEMA, TestBase.SPEC, 2);
@@ -826,17 +826,17 @@ class TestBinPackRewriteFilePlanner {
     assertThat(task.length()).isEqualTo(10);
     assertThat(task.sizeBytes()).isEqualTo(110);
 
-    // the size of the delete file counts towards the budget, 110 > 50
+    // only the size of the data file counts towards the budget, the delete file is ignored
     Map<String, String> options = Maps.newHashMap(REWRITE_ALL);
-    options.put(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, "50");
+    options.put(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, "10");
     BinPackRewriteFilePlanner planner = new BinPackRewriteFilePlanner(v2Table);
     planner.init(options);
-    assertThat(planner.plan().totalGroupCount()).isZero();
+    assertThat(planner.plan().totalGroupCount()).isEqualTo(1);
 
-    options.put(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, "110");
+    options.put(RewriteDataFiles.MAX_TOTAL_FILES_SIZE_BYTES, "9");
     planner = new BinPackRewriteFilePlanner(v2Table);
     planner.init(options);
-    assertThat(planner.plan().totalGroupCount()).isEqualTo(1);
+    assertThat(planner.plan().totalGroupCount()).isZero();
   }
 
   @ParameterizedTest

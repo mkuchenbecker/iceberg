@@ -116,6 +116,12 @@ public class SparkReadConf {
       return inputBranch;
     }
 
+    // an explicit snapshot, timestamp or tag selects what to read, so the session WAP branch
+    // applies only to reads that do not select a version
+    if (snapshotId() != null || asOfTimestamp() != null || tag() != null) {
+      return null;
+    }
+
     boolean wapEnabled =
         PropertyUtil.propertyAsBoolean(
             table.properties(), TableProperties.WRITE_AUDIT_PUBLISH_ENABLED, false);
